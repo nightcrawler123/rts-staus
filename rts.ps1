@@ -16,3 +16,20 @@ foreach ($ip in $ips) {
 }
 
 $results | Export-Csv -Path $outputFile -NoTypeInformation
+
+
+
+
+Sub SplitEachWorksheet()
+Dim FPath As String
+FPath = Application.ActiveWorkbook.Path
+Application.ScreenUpdating = False
+Application.DisplayAlerts = False
+For Each ws In ThisWorkbook.Sheets
+    ws.Copy
+    Application.ActiveWorkbook.SaveAs Filename:=FPath & "\" & ws.Name & ".xlsx"
+    Application.ActiveWorkbook.Close False
+Next
+Application.DisplayAlerts = True
+Application.ScreenUpdating = True
+End Sub
