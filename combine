@@ -1,5 +1,18 @@
-
-NewTable = UNION(
-    SELECTCOLUMNS('Automation', "Weekly", 'Automation'[Weekly], "Associated Release", 'Automation'[Associated Release]),
-    SELECTCOLUMNS('Manual', "Weekly", 'Manual'[Weekly], "Associated Release", 'Manual'[Associated Release])
+NewTable = 
+SUMMARIZE(
+    UNION(
+        ADDCOLUMNS(
+            'Manual',
+            "Type", "Manual",
+            "Release", 'Manual'[Manual Release]
+        ),
+        ADDCOLUMNS(
+            'Automation',
+            "Type", "Automation",
+            "Release", 'Automation'[Associated Release]
+        )
+    ),
+    [weekly],
+    "Count of Manual Release", CALCULATE(COUNT('Manual'[Manual Release]), 'Manual'[Type] = "Manual"),
+    "Count of Automation Release", CALCULATE(COUNT('Automation'[Associated Release]), 'Automation'[Type] = "Automation")
 )
