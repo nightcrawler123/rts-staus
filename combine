@@ -1,11 +1,11 @@
 Manual Count = 
 CALCULATE(
     DISTINCTCOUNT('Manual'[Associated Release]),
-    FILTER('Manual', 'Manual'[Weekly] = EARLIER('Manual'[Weekly]))
+    ALLEXCEPT('Manual', 'Manual'[Weekly])
 )
 
 Automation Count = 
 CALCULATE(
     DISTINCTCOUNT('Automation'[Associated Release]),
-    FILTER('Automation', 'Automation'[Weekly] = EARLIER('Automation'[Weekly]))
+    ALLEXCEPT('Automation', 'Automation'[Weekly])
 )
