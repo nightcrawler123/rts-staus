@@ -1,5 +1,5 @@
 Table = SUMMARIZECOLUMNS(
     Automation[Weekly],
-    "Associated Release (Automation)", Automation[Associated Release (Automation)],
-    "Associated Release (Manual)", Manual[Associated Release (Manual)]
+    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
+    "Count of Associated Release (Manual)", COUNT(Manual[Associated Release (Manual)])
 )
