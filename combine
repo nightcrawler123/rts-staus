@@ -6,4 +6,5 @@ SELECTCOLUMNS(
 )
 
 
-NewTable[Manual Release] = LOOKUPVALUE(Manual[Manual Release], Manual[Weekly], NewTable[Weekly])
+Manual Release = LOOKUPVALUE(Manual[Manual Release], Manual[Weekly], NewTable[Weekly])
+
