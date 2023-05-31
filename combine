@@ -1,35 +1,5 @@
-Table = SUMMARIZECOLUMNS(
-    Automation[Weekly],
-    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
-    "Count of Associated Release (Manual)", COUNT(Manual[Associated Release (Manual)])
-)
 
-
-Table = SUMMARIZECOLUMNS(
-    Automation[Weekly],
-    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
-    "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)])
-)
-
-
-
-Table = SUMMARIZECOLUMNS(
-    Automation[Weekly],
-    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
-    "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)]),
-    FILTER(Manual, Manual[Weekly] IN VALUES(Automation[Weekly]))
-)
-
-Table = SUMMARIZECOLUMNS(
-    Automation[Weekly],
-    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
-    "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)]),
-    FILTER(Manual, CONTAINS(Automation, Automation[Weekly], Manual[Weekly]))
-)
-
-Table = SUMMARIZECOLUMNS(
-    Automation[Weekly],
-    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
-    "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)]),
-    FILTER(Manual, CONTAINS(Automation, Automation[Weekly], Manual[Weekly]))
+NewTable = UNION(
+    SELECTCOLUMNS('Automation', "Weekly", 'Automation'[Weekly], "Associated Release", 'Automation'[Associated Release]),
+    SELECTCOLUMNS('Manual', "Weekly", 'Manual'[Weekly], "Associated Release", 'Manual'[Associated Release])
 )
