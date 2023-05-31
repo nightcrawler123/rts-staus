@@ -1,31 +1,9 @@
-Manual Table = 
-SUMMARIZE(
-    Manual,
-    'Manual'[Weekly],
-    "Manual Count", DISTINCTCOUNT('Manual'[Associated Release])
-)
-
-
-
-
-Automation Table = 
-SUMMARIZE(
+NewTable = 
+SELECTCOLUMNS(
     Automation,
-    'Automation'[Weekly],
-    "Automation Count", DISTINCTCOUNT('Automation'[Associated Release])
+    "Weekly", Automation[Weekly],
+    "Automation Release", Automation[Automation Release]
 )
 
 
-
-
-Combined Table = 
-UNION(
-    SELECTCOLUMNS('Manual Table', "Weekly", 'Manual Table'[Weekly], "Count", 'Manual Table'[Manual Count]),
-    SELECTCOLUMNS('Automation Table', "Weekly", 'Automation Table'[Weekly], "Count", 'Automation Table'[Automation Count])
-)
-
-
-
-
-
-Total Count = SUM('Combined Table'[Count])
+NewTable[Manual Release] = LOOKUPVALUE(Manual[Manual Release], Manual[Weekly], NewTable[Weekly])
