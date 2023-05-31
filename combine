@@ -1,10 +1,5 @@
-NewTable = 
-SELECTCOLUMNS(
-    Automation,
-    "Weekly", Automation[Weekly],
-    "Automation Release", Automation[Automation Release]
+Table = SUMMARIZECOLUMNS(
+    Automation[Weekly],
+    "Associated Release (Automation)", Automation[Associated Release (Automation)],
+    "Associated Release (Manual)", Manual[Associated Release (Manual)]
 )
-
-
-Manual Release = LOOKUPVALUE(Manual[Manual Release], Manual[Weekly], NewTable[Weekly])
-
