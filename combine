@@ -1,16 +1,11 @@
-CombinedTable = 
-UNION (
-    SELECTCOLUMNS('Manual',"Week", 'Manual'[WEEK], "Release", 'Manual'[Associated release], "Type", "Manual"),
-    SELECTCOLUMNS('Automation',"Week", 'Automation'[WEEK], "Release", 'Automation'[Associated release], "Type", "Automation")
+Manual Count = 
+CALCULATE(
+    DISTINCTCOUNT('Manual'[Associated Release]),
+    FILTER('Manual', 'Manual'[Weekly] = EARLIER('Manual'[Weekly]))
 )
 
-
-CombinedTable = 
-UNION (
-    SELECTCOLUMNS('Manual',"Week", 'Manual'[Weekly], "Release", 'Manual'[Associated Release], "Type", "Manual"),
-    SELECTCOLUMNS('Automation',"Week", 'Automation'[Weekly], "Release", 'Automation'[Associated Release], "Type", "Automation")
+Automation Count = 
+CALCULATE(
+    DISTINCTCOUNT('Automation'[Associated Release]),
+    FILTER('Automation', 'Automation'[Weekly] = EARLIER('Automation'[Weekly]))
 )
-
-
-
-Date Table = CALENDAR(MINIMUM(Manual[Weekly], Automation[Weekly]), MAXIMUM(Manual[Weekly], Automation[Weekly]))
