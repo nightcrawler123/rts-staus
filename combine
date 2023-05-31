@@ -19,3 +19,11 @@ Table = SUMMARIZECOLUMNS(
     "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)]),
     FILTER(Manual, Manual[Weekly] IN VALUES(Automation[Weekly]))
 )
+
+Table = SUMMARIZECOLUMNS(
+    Automation[Weekly],
+    "Count of Associated Release (Automation)", COUNT(Automation[Associated Release (Automation)]),
+    "Count of Associated Release (Manual)", DISTINCTCOUNT(Manual[Associated Release (Manual)]),
+    FILTER(Manual, CONTAINS(Automation, Automation[Weekly], Manual[Weekly]))
+)
+
