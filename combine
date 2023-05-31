@@ -10,3 +10,7 @@ UNION (
     SELECTCOLUMNS('Manual',"Week", 'Manual'[Weekly], "Release", 'Manual'[Associated Release], "Type", "Manual"),
     SELECTCOLUMNS('Automation',"Week", 'Automation'[Weekly], "Release", 'Automation'[Associated Release], "Type", "Automation")
 )
+
+
+
+Date Table = CALENDAR(MINIMUM(Manual[Weekly], Automation[Weekly]), MAXIMUM(Manual[Weekly], Automation[Weekly]))
