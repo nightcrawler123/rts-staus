@@ -1,11 +1,31 @@
-Manual Count = 
-CALCULATE(
-    DISTINCTCOUNT('Manual'[Associated Release]),
-    ALLEXCEPT('Manual', 'Manual'[Weekly])
+Manual Table = 
+SUMMARIZE(
+    Manual,
+    'Manual'[Weekly],
+    "Manual Count", DISTINCTCOUNT('Manual'[Associated Release])
 )
 
-Automation Count = 
-CALCULATE(
-    DISTINCTCOUNT('Automation'[Associated Release]),
-    ALLEXCEPT('Automation', 'Automation'[Weekly])
+
+
+
+Automation Table = 
+SUMMARIZE(
+    Automation,
+    'Automation'[Weekly],
+    "Automation Count", DISTINCTCOUNT('Automation'[Associated Release])
 )
+
+
+
+
+Combined Table = 
+UNION(
+    SELECTCOLUMNS('Manual Table', "Weekly", 'Manual Table'[Weekly], "Count", 'Manual Table'[Manual Count]),
+    SELECTCOLUMNS('Automation Table', "Weekly", 'Automation Table'[Weekly], "Count", 'Automation Table'[Automation Count])
+)
+
+
+
+
+
+Total Count = SUM('Combined Table'[Count])
