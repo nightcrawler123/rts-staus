@@ -1,0 +1,19 @@
+Subject: Important Update on Java Removal for Non-Users
+
+Dear Team,
+
+I hope this message finds you well. I wanted to reach out and share some updates on our ongoing Java removal initiative, a project that we've been carefully planning and executing.
+
+As you might remember, we began the process of removing Java from devices of those who aren't using it last year. This was put on pause for a while due to other pressing deployments, but we're ready to move forward again. Starting from the 18th of January 2024, we'll continue with this project, focusing on ensuring that only those who truly need Java will have it installed on their devices.
+
+For those in our team who might still require Java for their work, please rest assured that this isn't a final goodbye to the software. If you find yourself needing Java after it's been removed, you can easily reinstall it via the Software Center. The process should take no more than 15-30 minutes.
+
+The reason behind our decision to refine Java usage comes down to changes in licensing costs introduced by Oracle. We've been working hard to identify who really needs Java Runtime Environment (JRE) on their devices, conducting a thorough 6-8 month tracking of device usage across Asia through SCCM. This careful analysis has helped us determine which devices truly require JRE, ensuring we can make informed decisions about its distribution.
+
+Please find attached the list of devices scheduled for Java removal as well as those exempt from this process. This list is for your reference, and we kindly ask that you share this information with users in your region.
+
+Thank you for your cooperation and understanding as we continue with this necessary adjustment. Your support in cascading this information to your respective teams is invaluable. Should you have any questions or need further clarification, please don't hesitate to reach out.
+
+Warm regards,
+
+[Your Name]
