@@ -29,6 +29,7 @@ for i in range(0, total_rows, total_rows//10):
 
 print("Processing completed.")
 
+
 # Save the result to a new Excel workbook
 result_df.to_excel('output.xlsx', index=False)
 
