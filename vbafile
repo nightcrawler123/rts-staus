@@ -3,18 +3,33 @@ Sub ConvertToDate()
     Dim dateParts() As String
     Dim dayPart As Integer, monthPart As Integer, yearPart As Integer
     Dim dateValue As Date
+    Dim isValid As Boolean
     
     For Each cell In Selection
         If cell.Value <> "" Then
+            isValid = True
             If InStr(cell.Value, "-") > 0 Then
                 dateParts = Split(cell.Value, "-")
                 If UBound(dateParts) = 2 Then
-                    dayPart = CInt(dateParts(0))
-                    monthPart = CInt(dateParts(1))
-                    yearPart = CInt(dateParts(2))
-                    dateValue = DateSerial(yearPart, monthPart, dayPart)
-                    cell.Value = dateValue
-                    cell.NumberFormat = "dd-mm-yyyy"
+                    ' Check if all parts are numeric
+                    If IsNumeric(dateParts(0)) And IsNumeric(dateParts(1)) And IsNumeric(dateParts(2)) Then
+                        dayPart = CInt(dateParts(0))
+                        monthPart = CInt(dateParts(1))
+                        yearPart = CInt(dateParts(2))
+                        ' Further validate day, month, and year ranges
+                        If dayPart >= 1 And dayPart <= 31 And monthPart >= 1 And monthPart <= 12 And yearPart > 0 Then
+                            On Error Resume Next
+                            dateValue = DateSerial(yearPart, monthPart, dayPart)
+                            If Err.Number <> 0 Then
+                                isValid = False
+                            End If
+                            On Error GoTo 0
+                            If isValid Then
+                                cell.Value = dateValue
+                                cell.NumberFormat = "dd-mm-yyyy"
+                            End If
+                        End If
+                    End If
                 End If
             End If
         End If
