@@ -1,0 +1,22 @@
+Sub ConvertToDate()
+    Dim cell As Range
+    Dim dateParts() As String
+    Dim dayPart As Integer, monthPart As Integer, yearPart As Integer
+    Dim dateValue As Date
+    
+    For Each cell In Selection
+        If cell.Value <> "" Then
+            If InStr(cell.Value, "-") > 0 Then
+                dateParts = Split(cell.Value, "-")
+                If UBound(dateParts) = 2 Then
+                    dayPart = CInt(dateParts(0))
+                    monthPart = CInt(dateParts(1))
+                    yearPart = CInt(dateParts(2))
+                    dateValue = DateSerial(yearPart, monthPart, dayPart)
+                    cell.Value = dateValue
+                    cell.NumberFormat = "dd-mm-yyyy"
+                End If
+            End If
+        End If
+    Next cell
+End Sub
