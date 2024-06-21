@@ -55,14 +55,18 @@ Sub SplitDataByApplication()
             ' Filter data for the application
             ws.Range("A1").AutoFilter Field:=appRange.Column, Criteria1:=app
             
-            ' Create new workbook and copy filtered data
-            Set newWb = Workbooks.Add
-            Set newWs = newWb.Sheets(1)
-            ws.UsedRange.SpecialCells(xlCellTypeVisible).Copy newWs.Range("A1")
-            
-            ' Save new workbook
-            newWb.SaveAs folderPath & app & ".xlsx"
-            newWb.Close False
+            ' Check if there are any visible rows after filtering
+            If ws.Range("A2:A" & lastRow).SpecialCells(xlCellTypeVisible).Count > 1 Then
+                ' Create new workbook and copy filtered data
+                Set newWb = Workbooks.Add
+                Set newWs = newWb.Sheets(1)
+                
+                ws.UsedRange.SpecialCells(xlCellTypeVisible).Copy newWs.Range("A1")
+                
+                ' Save new workbook
+                newWb.SaveAs folderPath & app & ".xlsx"
+                newWb.Close False
+            End If
         Next app
         
         ' Remove filter from original sheet
@@ -72,6 +76,9 @@ Sub SplitDataByApplication()
 Cleanup:
     Application.ScreenUpdating = True
     Application.Calculation = xlCalculationAutomatic
+    
+    MsgBox "Processing is complete.", vbInformation
+    
     Exit Sub
     
 ErrorHandler:
