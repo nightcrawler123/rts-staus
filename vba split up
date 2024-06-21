@@ -1,0 +1,80 @@
+Sub SplitDataByApplication()
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim newWb As Workbook
+    Dim appRange As Range
+    Dim uniqueApps As Collection
+    Dim app As Variant
+    Dim newWs As Worksheet
+    Dim dataRange As Range
+    Dim dateSuffix As String
+    Dim folderPath As String
+    Dim wsName As String
+    Dim cell As Range
+    Dim lastRow As Long
+    Dim lastCol As Long
+    
+    On Error GoTo ErrorHandler
+    
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    
+    Set wb = ThisWorkbook
+    
+    ' Loop through each worksheet
+    For Each ws In wb.Worksheets
+        wsName = ws.Name
+        ' Create folder for the sheet
+        dateSuffix = Format(Date, "dd-mmm-yy")
+        folderPath = wb.Path & "\" & wsName & "-" & dateSuffix & "\"
+        
+        ' Create folder if it doesn't exist
+        If Dir(folderPath, vbDirectory) = "" Then
+            MkDir folderPath
+        End If
+        
+        ' Find the last row and column with data
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+        
+        ' Set range for applications
+        Set appRange = ws.Range("A1").EntireRow.Find("Application").EntireColumn.Resize(lastRow)
+        Set uniqueApps = New Collection
+        
+        ' Get unique application values
+        On Error Resume Next
+        For Each cell In appRange
+            If cell.Value <> "" Then
+                uniqueApps.Add cell.Value, CStr(cell.Value)
+            End If
+        Next cell
+        On Error GoTo 0
+        
+        ' Split data by unique application
+        For Each app In uniqueApps
+            ' Filter data for the application
+            ws.Range("A1").AutoFilter Field:=appRange.Column, Criteria1:=app
+            
+            ' Create new workbook and copy filtered data
+            Set newWb = Workbooks.Add
+            Set newWs = newWb.Sheets(1)
+            ws.UsedRange.SpecialCells(xlCellTypeVisible).Copy newWs.Range("A1")
+            
+            ' Save new workbook
+            newWb.SaveAs folderPath & app & ".xlsx"
+            newWb.Close False
+        Next app
+        
+        ' Remove filter from original sheet
+        ws.AutoFilterMode = False
+    Next ws
+    
+Cleanup:
+    Application.ScreenUpdating = True
+    Application.Calculation = xlCalculationAutomatic
+    Exit Sub
+    
+ErrorHandler:
+    MsgBox "An error occurred: " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
