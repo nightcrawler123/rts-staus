@@ -32,7 +32,32 @@ def log_message(message, log_file):
         log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
     print(message)
 
-def main(input_file, output_file, log_file):
+def select_txt_file():
+    txt_files = [f for f in os.listdir() if f.endswith('.txt')]
+    if not txt_files:
+        print("No .txt files found in the current directory.")
+        return None
+    
+    print("Select a .txt file from the following list:")
+    for i, file in enumerate(txt_files, 1):
+        print(f"{i}. {file}")
+    
+    while True:
+        try:
+            choice = int(input("Enter the number corresponding to the file: "))
+            if 1 <= choice <= len(txt_files):
+                return txt_files[choice - 1]
+            else:
+                print("Invalid choice. Please enter a number from the list.")
+        except ValueError:
+            print("Invalid input. Please enter a number.")
+
+def main(output_file, log_file):
+    # Select input file
+    input_file = select_txt_file()
+    if input_file is None:
+        return
+    
     # Clear log file
     open(log_file, 'w').close()
     
@@ -63,8 +88,7 @@ def main(input_file, output_file, log_file):
     log_message(f"Total hostnames/machines pinged: {len(hostnames)}", log_file)
 
 if __name__ == "__main__":
-    input_file = 'hostnames.txt'  # Input text file with hostnames
     output_file = 'ping_results.xlsx'  # Output Excel file
     log_file = 'ping_log.txt'  # Log file
     
-    main(input_file, output_file, log_file)
+    main(output_file, log_file)
