@@ -2,17 +2,16 @@ import os
 import time
 import socket
 import ping3
-import asyncio
-import aiohttp
+import concurrent.futures
 from openpyxl import Workbook
 from datetime import datetime
 
 ping3.EXPECTED_PING_VERSION = '1'
 
-async def ping_host(hostname, session):
+def ping_host(hostname):
     try:
         ip = socket.gethostbyname(hostname)
-        response = await asyncio.to_thread(ping3.ping, ip, timeout=3)
+        response = ping3.ping(ip, timeout=3)
         status = 'online' if response else 'offline'
     except (socket.gaierror, ping3.errors.HostUnknown):
         ip = 'N/A'
@@ -31,9 +30,11 @@ def create_excel(data, output_file):
     wb.save(output_file)
 
 def log_message(message, log_file):
+    current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+    log_entry = f"{current_time} - {message}"
     with open(log_file, 'a') as log:
-        log.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-    print(message)
+        log.write(log_entry + "\n")
+    print(log_entry)
 
 def select_txt_file():
     txt_files = [f for f in os.listdir() if f.endswith('.txt')]
@@ -55,7 +56,7 @@ def select_txt_file():
         except ValueError:
             print("Invalid input. Please enter a number.")
 
-async def main(log_file):
+def main(log_file):
     # Select input file
     input_file = select_txt_file()
     if input_file is None:
@@ -72,23 +73,23 @@ async def main(log_file):
     log_message(f"Starting to ping {len(hostnames)} hostnames...", log_file)
     
     results = []
-    async with aiohttp.ClientSession() as session:
-        tasks = [ping_host(hostname, session) for hostname in hostnames]
-        for future in asyncio.as_completed(tasks):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        future_to_host = {executor.submit(ping_host, hostname): hostname for hostname in hostnames}
+        for future in concurrent.futures.as_completed(future_to_host):
+            hostname = future_to_host[future]
             try:
-                result = await future
+                result = future.result()
                 results.append(result)
             except Exception as exc:
                 log_message(f"{hostname} generated an exception: {exc}", log_file)
     
     # Generate output file name
-    date_str = datetime.now().strftime('%d-%b-%y')
+    end_time = time.time()
+    total_time = end_time - start_time
+    date_str = datetime.now().strftime('%d-%b-%y_%H-%M-%S')
     output_file = f'ping_results_{date_str}.xlsx'
     
     create_excel(results, output_file)
-    
-    end_time = time.time()
-    total_time = end_time - start_time
 
     log_message(f"Finished pinging. Total time: {total_time:.2f} seconds", log_file)
     log_message(f"Total hostnames/machines pinged: {len(hostnames)}", log_file)
@@ -98,4 +99,4 @@ async def main(log_file):
 if __name__ == "__main__":
     log_file = 'ping_log.txt'  # Log file
     
-    asyncio.run(main(log_file))
+    main(log_file)
