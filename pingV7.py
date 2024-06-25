@@ -13,7 +13,7 @@ def ping_host(hostname):
         response = ping3.ping(ip)
         status = 'online' if response else 'offline'
     except (socket.gaierror, ping3.errors.HostUnknown):
-        ip = 'N/A'
+        ip = 'Bad Host'
         status = 'offline'
     return hostname, ip, status
 
