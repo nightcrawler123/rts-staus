@@ -73,15 +73,18 @@ def main(log_file):
     log_message(f"Starting to ping {len(hostnames)} hostnames...", log_file)
     
     results = []
+    total_hostnames = len(hostnames)
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         future_to_host = {executor.submit(ping_host, hostname): hostname for hostname in hostnames}
-        for future in concurrent.futures.as_completed(future_to_host):
+        for i, future in enumerate(concurrent.futures.as_completed(future_to_host), 1):
             hostname = future_to_host[future]
             try:
                 result = future.result()
                 results.append(result)
             except Exception as exc:
                 log_message(f"{hostname} generated an exception: {exc}", log_file)
+            # Display progress
+            print(f"Progress: {i}/{total_hostnames} hostnames processed", end='\r')
     
     # Generate output file name
     end_time = time.time()
@@ -94,7 +97,7 @@ def main(log_file):
     log_message(f"Finished pinging. Total time: {total_time:.2f} seconds", log_file)
     log_message(f"Total hostnames/machines pinged: {len(hostnames)}", log_file)
     log_message(f"Output Excel file: {output_file}", log_file)
-    print(f"Output Excel file: {output_file}")
+    print(f"\nOutput Excel file: {output_file}")
 
 if __name__ == "__main__":
     log_file = 'ping_log.txt'  # Log file
