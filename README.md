@@ -24,6 +24,10 @@ pip install pandas openpyxl xlrd
 pip install ping3 openpyxl
 ```
 
+```sh
+pip install aiohttp
+```
+
 ### Package Descriptions:
 - **pandas**: For reading and writing Excel files, as well as handling DataFrames.
 - **openpyxl**: For reading and writing `.xlsx` files (this is used internally by pandas for handling Excel files).
