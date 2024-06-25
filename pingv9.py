@@ -14,17 +14,17 @@ def ping_host(hostname):
     try:
         ip = socket.gethostbyname(hostname)
         response = ping3.ping(ip)
-        status = 'online' if response else 'offline'
+        status = 'Succeed' if response else 'Request Time Out'
     except (socket.gaierror, ping3.errors.HostUnknown):
         ip = 'Bad Host'
-        status = 'offline'
+        status = 'Bad Host Name'
     return hostname, ip, status
 
 def create_excel(data, output_file):
     wb = Workbook()
     ws = wb.active
     ws.title = 'Ping Results'
-    ws.append(['HostName', 'IP', 'Online/Offline'])
+    ws.append(['HostName', 'IP', 'Status'])
 
     for row in data:
         ws.append(row)
@@ -105,21 +105,21 @@ def main(log_file):
     
     results = []
     completed_count = 0
-    online_count = 0
-    offline_count = 0
+    succeed_count = 0
+    request_timeout_count = 0
     bad_host_count = 0
 
-    def update_progress(status, ip):
-        nonlocal completed_count, online_count, offline_count, bad_host_count
+    def update_progress(status):
+        nonlocal completed_count, succeed_count, request_timeout_count, bad_host_count
         completed_count += 1
-        if status == 'online':
-            online_count += 1
-        elif ip == 'Bad Host':
+        if status == 'Succeed':
+            succeed_count += 1
+        elif status == 'Bad Host Name':
             bad_host_count += 1
         else:
-            offline_count += 1
+            request_timeout_count += 1
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"\r{timestamp} - Progress: {completed_count}/{total_hostnames} ({(completed_count/total_hostnames)*100:.2f}%) | Online: {online_count} | Offline: {offline_count} | Bad Host: {bad_host_count}", end='', flush=True)
+        print(f"\r{timestamp} - Progress: {completed_count}/{total_hostnames} ({(completed_count/total_hostnames)*100:.2f}%) | Succeed: {succeed_count} | Request Time Out: {request_timeout_count} | Bad Host Name: {bad_host_count}", end='', flush=True)
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_host = {executor.submit(ping_host, hostname): hostname for hostname in hostnames}
@@ -128,7 +128,7 @@ def main(log_file):
             try:
                 result = future.result()
                 results.append(result)
-                update_progress(result[2], result[1])
+                update_progress(result[2])
             except Exception as exc:
                 log_message(f"{hostname} generated an exception: {exc}", log_file)
     
@@ -143,7 +143,7 @@ def main(log_file):
 
     log_message(f"Finished pinging. Total time: {total_time:.2f} seconds", log_file)
     log_message(f"Total hostnames/machines pinged: {total_hostnames}", log_file)
-    log_message(f"Online: {online_count} | Offline: {offline_count} | Bad Host: {bad_host_count}", log_file)
+    log_message(f"Succeed: {succeed_count} | Request Time Out: {request_timeout_count} | Bad Host Name: {bad_host_count}", log_file)
     log_message(f"Output Excel file: {output_file}", log_file)
     print(f"\nOutput Excel file: {output_file}")
 
