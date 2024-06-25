@@ -5,7 +5,10 @@ import ping3
 import concurrent.futures
 import openpyxl
 from openpyxl import Workbook
-from datetime import datetime
+from datetime import datetime, timedelta
+
+LOG_RETENTION_DAYS = 7
+LOG_FILE = 'ping_log.txt'
 
 def ping_host(hostname):
     try:
@@ -29,11 +32,41 @@ def create_excel(data, output_file):
     wb.save(output_file)
 
 def log_message(message, log_file):
-    timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     log_entry = f"{timestamp} - {message}"
+    
+    # Append log entry
     with open(log_file, 'a') as log:
         log.write(log_entry + "\n")
+    
     print(log_entry)  # Print message with timestamp
+    
+    # Manage log retention
+    purge_old_logs(log_file)
+
+def purge_old_logs(log_file):
+    if not os.path.exists(log_file):
+        return
+    
+    # Read current log entries
+    with open(log_file, 'r') as log:
+        log_entries = log.readlines()
+    
+    # Filter out entries older than LOG_RETENTION_DAYS
+    current_time = datetime.now()
+    retained_entries = []
+    for entry in log_entries:
+        try:
+            entry_time = datetime.strptime(entry.split(' - ')[0], '%Y-%m-%d %H:%M:%S')
+            if current_time - entry_time < timedelta(days=LOG_RETENTION_DAYS):
+                retained_entries.append(entry)
+        except ValueError:
+            # Ignore malformed log entries
+            continue
+    
+    # Write back the retained entries
+    with open(log_file, 'w') as log:
+        log.writelines(retained_entries)
 
 def select_txt_file():
     txt_files = [f for f in os.listdir() if f.endswith('.txt')]
@@ -60,9 +93,6 @@ def main(log_file):
     input_file = select_txt_file()
     if input_file is None:
         return
-    
-    # Clear log file
-    open(log_file, 'w').close()
     
     start_time = time.time()
 
@@ -121,6 +151,4 @@ def main(log_file):
     print(f"\nOutput Excel file: {output_file}")
 
 if __name__ == "__main__":
-    log_file = 'ping_log.txt'  # Log file
-    
-    main(log_file)
+    main(LOG_FILE)
