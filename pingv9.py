@@ -119,8 +119,7 @@ def main(log_file):
         else:
             offline_count += 1
         timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"{timestamp} - Progress: {completed_count}/{total_hostnames} ({(completed_count/total_hostnames)*100:.2f}%)", end='\r')
-        print(f"\nOnline: {online_count} | Offline: {offline_count} | Bad Host: {bad_host_count}", end='\r')
+        print(f"\r{timestamp} - Progress: {completed_count}/{total_hostnames} ({(completed_count/total_hostnames)*100:.2f}%) | Online: {online_count} | Offline: {offline_count} | Bad Host: {bad_host_count}", end='', flush=True)
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         future_to_host = {executor.submit(ping_host, hostname): hostname for hostname in hostnames}
@@ -132,8 +131,6 @@ def main(log_file):
                 update_progress(result[2], result[1])
             except Exception as exc:
                 log_message(f"{hostname} generated an exception: {exc}", log_file)
-            finally:
-                update_progress('offline', 'Bad Host')
     
     # Generate output file name with date and time
     date_str = datetime.now().strftime('%d-%b-%y_%H-%M-%S')
