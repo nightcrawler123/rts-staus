@@ -5,9 +5,6 @@ import glob
 import time
 from multiprocessing import Pool, cpu_count
 
-# Start the timer
-start_time = time.time()
-
 # Define the mapping of CSV filename patterns to sheet names
 pattern_to_sheet = {
     'QDS-above-70-crossed-40d': 'QDS above 70 G40',
@@ -76,30 +73,34 @@ def recombine_csv_to_excel():
                 df = pd.read_csv(csv_path)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-# Step 1: Convert sheets to CSV files
-print("Converting Excel sheets to CSV files...")
-with Pool(cpu_count()) as pool:
-    list(tqdm(pool.imap(convert_sheet_to_csv, sheets_to_process), total=len(sheets_to_process)))
+if __name__ == '__main__':
+    # Start the timer
+    start_time = time.time()
 
-# Step 2: Process CSV files (delete oldest date)
-print("Processing CSV files (deleting oldest date)...")
-with Pool(cpu_count()) as pool:
-    list(tqdm(pool.imap(process_csv_file, sheets_to_process), total=len(sheets_to_process)))
+    # Step 1: Convert sheets to CSV files
+    print("Converting Excel sheets to CSV files...")
+    with Pool(cpu_count()) as pool:
+        list(tqdm(pool.imap(convert_sheet_to_csv, sheets_to_process), total=len(sheets_to_process)))
 
-# Step 3: Append data from other CSV files
-print("Appending data from other CSV files...")
-with Pool(cpu_count()) as pool:
-    list(tqdm(pool.imap(append_csv_data, sheets_to_process), total=len(sheets_to_process)))
+    # Step 2: Process CSV files (delete oldest date)
+    print("Processing CSV files (deleting oldest date)...")
+    with Pool(cpu_count()) as pool:
+        list(tqdm(pool.imap(process_csv_file, sheets_to_process), total=len(sheets_to_process)))
 
-# Step 4: Recombine CSV files into Excel workbook
-print("Recombining CSV files into Excel workbook...")
-recombine_csv_to_excel()
+    # Step 3: Append data from other CSV files
+    print("Appending data from other CSV files...")
+    with Pool(cpu_count()) as pool:
+        list(tqdm(pool.imap(append_csv_data, sheets_to_process), total=len(sheets_to_process)))
 
-# Optional: Remove temporary CSV files
-# import shutil
-# shutil.rmtree(csv_dir)
+    # Step 4: Recombine CSV files into Excel workbook
+    print("Recombining CSV files into Excel workbook...")
+    recombine_csv_to_excel()
 
-# Calculate and display the total execution time
-end_time = time.time()
-elapsed_time = end_time - start_time
-print(f"Script completed in {elapsed_time:.2f} seconds.")
+    # Optional: Remove temporary CSV files
+    # import shutil
+    # shutil.rmtree(csv_dir)
+
+    # Calculate and display the total execution time
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print(f"Script completed in {elapsed_time:.2f} seconds.")
