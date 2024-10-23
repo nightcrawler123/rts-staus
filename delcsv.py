@@ -16,8 +16,8 @@ cols_to_drop = list(range(12, 16)) + list(range(22, 30)) + list(range(32, 38)) +
 for file in os.listdir():
     if file.endswith('.csv') and any(pattern in file for pattern in patterns):
         print(f"Processing file: {file}")
-        # Read the CSV file, skipping the first 4 rows
-        df = pd.read_csv(file, skiprows=4)
+        # Read the CSV file, skipping the first 4 rows, with low_memory=False to handle mixed types
+        df = pd.read_csv(file, skiprows=4, low_memory=False)
         
         # Drop the specified columns
         df.drop(df.columns[cols_to_drop], axis=1, inplace=True)
@@ -28,3 +28,4 @@ for file in os.listdir():
         print(f"File saved as: {output_file}")
 
 print("Processing complete.")
+
