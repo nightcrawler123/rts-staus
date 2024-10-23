@@ -44,6 +44,22 @@ logging.basicConfig(
 
 from openpyxl import load_workbook
 
+def mangle_duplicate_columns(columns):
+    """
+    Makes duplicate column names unique by appending _1, _2, etc.
+    """
+    seen = {}
+    new_columns = []
+    for col in columns:
+        if col in seen:
+            seen[col] += 1
+            new_col = f"{col}_{seen[col]}"
+        else:
+            seen[col] = 0
+            new_col = col
+        new_columns.append(new_col)
+    return new_columns
+
 def map_csv_to_sheet(csv_filename):
     """
     Maps a CSV filename to the corresponding Excel sheet name based on predefined patterns.
@@ -60,6 +76,8 @@ def map_csv_to_sheet(csv_filename):
 def read_excel_sheets(excel_path):
     """
     Reads all sheets from the Excel file into a dictionary of Polars DataFrames using openpyxl in read-only mode.
+    Handles duplicate column names by mangling them to make unique.
+    Handles missing values and special characters.
     """
     try:
         print(f"Opening Excel file '{excel_path}' with openpyxl...")
@@ -77,24 +95,45 @@ def read_excel_sheets(excel_path):
 
             # Extract data using generator to minimize memory usage
             data = ws.values
-            # Get the first line as columns header
-            columns = next(data)
+            try:
+                # Get the first line as columns header
+                columns = next(data)
+            except StopIteration:
+                # Handle empty sheets
+                print(f"Sheet '{sheet_name}' is empty. Skipping.")
+                logging.warning(f"Sheet '{sheet_name}' is empty. Skipping.")
+                polars_dict[sheet_name] = pl.DataFrame()
+                continue
+
+            # Mangle duplicate column names
+            columns = mangle_duplicate_columns(columns)
+
             # Convert the rest of the data into a list of rows
             data_rows = list(data)
 
             # Create Polars DataFrame
             df = pl.DataFrame(data_rows, schema=columns)
 
-            # Optional: Drop any completely empty columns (if any)
-            # df = df.drop_nulls(subset=df.columns)
+            # Handle Missing Values
+            df = handle_missing_values(df)
 
+            # Handle Special Characters
+            df = handle_special_characters(df)
+
+            # Log missing values
+            log_missing_values(df, sheet_name)
+
+            # Assign to dictionary
             polars_dict[sheet_name] = df
+
             sheet_end_time = datetime.now()
             elapsed_time = sheet_end_time - sheet_start_time
             print(f"Finished reading sheet: {sheet_name} in {elapsed_time}")
             logging.info(f"Finished reading sheet: {sheet_name} in {elapsed_time}")
+
             # Free memory
             del ws
+            del data_rows
             gc.collect()
         print("Completed reading all Excel sheets.")
         wb.close()
@@ -103,34 +142,117 @@ def read_excel_sheets(excel_path):
         logging.error(f"Error reading Excel file '{excel_path}': {e}")
         sys.exit(f"Error reading Excel file '{excel_path}': {e}")
 
-# Rest of the functions remain the same...
+def handle_missing_values(df):
+    """
+    Handles missing values in the DataFrame.
+    For numerical columns, fills missing values with the mean.
+    For categorical/text columns, fills missing values with 'Unknown'.
+    """
+    try:
+        for col in df.columns:
+            if df[col].dtype in [pl.Float64, pl.Int64, pl.UInt64]:
+                # Fill numerical missing values with mean
+                mean_val = df[col].mean()
+                df = df.with_column(
+                    pl.col(col).fill_null(mean_val)
+                )
+            elif df[col].dtype == pl.Date:
+                # Fill missing dates with a default date, e.g., 1970-01-01
+                df = df.with_column(
+                    pl.col(col).fill_null(datetime(1970, 1, 1)).cast(pl.Date)
+                )
+            else:
+                # Fill categorical/text missing values with 'Unknown'
+                df = df.with_column(
+                    pl.col(col).fill_null("Unknown")
+                )
+        return df
+    except Exception as e:
+        logging.error(f"Error handling missing values: {e}")
+        print(f"Error handling missing values: {e}")
+        return df
 
-# (Include the other functions: read_csv_file, parse_columns, merge_data, remove_oldest_rows, save_final_excel, main)
+def handle_special_characters(df):
+    """
+    Ensures that special characters in string columns are properly handled.
+    Strips unwanted characters and preserves necessary ones.
+    """
+    try:
+        string_columns = [col for col in df.columns if df[col].dtype == pl.Utf8]
+        for col in string_columns:
+            # Example: Strip leading/trailing whitespace and replace problematic characters
+            df = df.with_column(
+                pl.col(col).str.strip().str.replace(r'[^\x00-\x7F]+', '', strict=False).alias(col)
+            )
+        return df
+    except Exception as e:
+        logging.error(f"Error handling special characters: {e}")
+        print(f"Error handling special characters: {e}")
+        return df
+
+def log_missing_values(df, sheet_name):
+    """
+    Logs the count of missing values per column in the DataFrame.
+    """
+    try:
+        missing_counts = df.null_count().to_dict()
+        for col, count in missing_counts.items():
+            if count > 0:
+                logging.info(f"Sheet '{sheet_name}': Column '{col}' has {count} missing values.")
+    except Exception as e:
+        logging.error(f"Error logging missing values for sheet '{sheet_name}': {e}")
 
 def read_csv_file(csv_path):
     """
     Reads a CSV file into a Polars DataFrame with all columns as strings.
+    Handles missing values and special characters.
     Logs any malformed rows or read errors.
     """
     try:
         print(f"Reading CSV file: {csv_path}")
         df = pl.read_csv(
             csv_path,
-            try_parse_dates=False,  # Disable automatic date parsing
-            ignore_errors=False,     # Do not ignore errors to capture bad rows
-            low_memory=False,        # Disable low_memory to improve type inference
-            n_threads=4,             # Utilize all available cores
-            infer_schema_length=1000,  # Infer schema from first 1000 rows
-            dtype={"Date": pl.Utf8},   # Ensure Date column is read as string
+            try_parse_dates=False,      # Disable automatic date parsing
+            ignore_errors=False,        # Do not ignore errors to capture bad rows
+            low_memory=False,           # Disable low_memory to improve type inference
+            n_threads=4,                # Utilize all available cores
+            infer_schema_length=1000,   # Infer schema from first 1000 rows
+            dtype={"Date": pl.Utf8},    # Ensure Date column is read as string
+            encoding='utf-8',           # Handle special characters
+            has_header=True
         )
         logging.info(f"Successfully read CSV file '{csv_path}' with {df.height} rows and {df.width} columns.")
         print(f"Successfully read CSV file: {csv_path} with {df.height} rows and {df.width} columns.")
+
+        # Handle Missing Values
+        df = handle_missing_values(df)
+
+        # Handle Special Characters
+        df = handle_special_characters(df)
+
+        # Log missing values
+        log_missing_values_csv(df, csv_path)
+
         return df
     except pl.errors.ParseError as pe:
         logging.error(f"Parse error in file '{csv_path}': {pe}")
+        print(f"Parse error in file '{csv_path}': {pe}")
     except Exception as e:
         logging.error(f"Unexpected error reading CSV file '{csv_path}': {e}")
+        print(f"Unexpected error reading CSV file '{csv_path}': {e}")
     return None
+
+def log_missing_values_csv(df, csv_path):
+    """
+    Logs the count of missing values per column in the CSV DataFrame.
+    """
+    try:
+        missing_counts = df.null_count().to_dict()
+        for col, count in missing_counts.items():
+            if count > 0:
+                logging.info(f"CSV '{csv_path}': Column '{col}' has {count} missing values.")
+    except Exception as e:
+        logging.error(f"Error logging missing values for CSV '{csv_path}': {e}")
 
 def parse_columns(df, date_column='Date'):
     """
@@ -153,12 +275,13 @@ def parse_columns(df, date_column='Date'):
         for col in numeric_columns:
             # Attempt to parse to Float
             df = df.with_column(
-                pl.col(col).str.strip().str.replace(',', '').cast(pl.Float64, strict=False)
+                pl.col(col).cast(pl.Float64, strict=False)
             )
         logging.info("Completed parsing columns to appropriate data types.")
         return df
     except Exception as e:
         logging.error(f"Error parsing columns: {e}")
+        print(f"Error parsing columns: {e}")
         return df  # Return DataFrame even if parsing fails
 
 def merge_data(excel_df, csv_df, date_column='Date'):
@@ -189,6 +312,7 @@ def merge_data(excel_df, csv_df, date_column='Date'):
         return merged_df
     except Exception as e:
         logging.error(f"Error merging data: {e}")
+        print(f"Error merging data: {e}")
         return excel_df  # Return original if merge fails
 
 def remove_oldest_rows(excel_sheets_dict, date_column='Date'):
@@ -201,6 +325,7 @@ def remove_oldest_rows(excel_sheets_dict, date_column='Date'):
             # Check if date column exists
             if date_column not in df.columns:
                 logging.warning(f"Date column '{date_column}' not found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
+                print(f"Date column '{date_column}' not found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
                 continue
             
             # Ensure the date column is of Date type
@@ -221,8 +346,10 @@ def remove_oldest_rows(excel_sheets_dict, date_column='Date'):
                 print(f"Removed rows with date '{min_date}' from sheet '{sheet_name}'.")
             else:
                 logging.warning(f"No valid dates found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
+                print(f"No valid dates found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
         except Exception as e:
             logging.error(f"Error removing oldest rows in sheet '{sheet_name}': {e}")
+            print(f"Error removing oldest rows in sheet '{sheet_name}': {e}")
 
 def save_final_excel(excel_sheets_dict, original_excel_path):
     """
@@ -326,6 +453,7 @@ def main():
         excel_sheets[sheet_name] = merged_df
         logging.info(f"Merged CSV file '{csv_file}' into sheet '{sheet_name}'.")
         print(f"Merged CSV file '{csv_file}' into sheet '{sheet_name}'.")
+
         # Free memory
         del csv_df
         del merged_df
