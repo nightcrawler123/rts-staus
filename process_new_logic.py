@@ -3,7 +3,6 @@ import os
 from tqdm import tqdm
 import glob
 import time
-from multiprocessing import Pool, cpu_count
 
 # Get the current working directory
 current_dir = os.getcwd()
@@ -33,7 +32,7 @@ def convert_sheet_to_csv(sheet_name):
 
 def process_csv_file(sheet_name):
     csv_path = os.path.join(csv_dir, f"{sheet_name}.csv")
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, low_memory=False)  # Set low_memory=False
 
     # Delete rows with the oldest date in the first column
     first_col = df.columns[0]
@@ -42,8 +41,6 @@ def process_csv_file(sheet_name):
 
     # Save the cleaned CSV back
     df.to_csv(csv_path, index=False)
-
-    return sheet_name
 
 def append_csv_data(sheet_name):
     # Match CSV files based on patterns and append data
@@ -60,11 +57,11 @@ def append_csv_data(sheet_name):
     if matched_files:
         # Read the main CSV file
         csv_path = os.path.join(csv_dir, f"{sheet_name}.csv")
-        df_main = pd.read_csv(csv_path)
+        df_main = pd.read_csv(csv_path, low_memory=False)  # Set low_memory=False
 
         # Append data from matched CSV files
         for csv_file in matched_files:
-            df_csv = pd.read_csv(csv_file, skiprows=1)
+            df_csv = pd.read_csv(csv_file, skiprows=1, low_memory=False)  # Set low_memory=False
             df_main = pd.concat([df_main, df_csv], ignore_index=True)
 
         # Save the combined data back to CSV
@@ -76,7 +73,7 @@ def recombine_csv_to_excel():
         for sheet_name in sheets_to_process:
             csv_path = os.path.join(csv_dir, f"{sheet_name}.csv")
             if os.path.exists(csv_path):
-                df = pd.read_csv(csv_path)
+                df = pd.read_csv(csv_path, low_memory=False)  # Set low_memory=False
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
 
 if __name__ == '__main__':
@@ -85,18 +82,18 @@ if __name__ == '__main__':
 
     # Step 1: Convert sheets to CSV files
     print("Converting Excel sheets to CSV files...")
-    with Pool(cpu_count()) as pool:
-        list(tqdm(pool.imap(convert_sheet_to_csv, sheets_to_process), total=len(sheets_to_process)))
+    for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
+        convert_sheet_to_csv(sheet_name)
 
     # Step 2: Process CSV files (delete oldest date)
     print("Processing CSV files (deleting oldest date)...")
-    with Pool(cpu_count()) as pool:
-        list(tqdm(pool.imap(process_csv_file, sheets_to_process), total=len(sheets_to_process)))
+    for sheet_name in tqdm(sheets_to_process, desc='Processing CSVs'):
+        process_csv_file(sheet_name)
 
     # Step 3: Append data from other CSV files
     print("Appending data from other CSV files...")
-    with Pool(cpu_count()) as pool:
-        list(tqdm(pool.imap(append_csv_data, sheets_to_process), total=len(sheets_to_process)))
+    for sheet_name in tqdm(sheets_to_process, desc='Appending Data'):
+        append_csv_data(sheet_name)
 
     # Step 4: Recombine CSV files into Excel workbook
     print("Recombining CSV files into Excel workbook...")
