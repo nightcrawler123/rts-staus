@@ -86,7 +86,7 @@ def infer_and_convert_types(df: pd.DataFrame, reference_df: Optional[pd.DataFram
     def convert_column(col: str, series: pd.Series) -> pd.Series:
         # First check if it's a date column
         if 'date' in col.lower() or (
-            series.dtype == 'object' and 
+            isinstance(series.dtype, pd.core.dtypes.dtypes.ObjectDtype) and 
             series.dropna().astype(str).str.contains(r'\d{4}-\d{2}-\d{2}').any()
         ):
             return pd.Series([safe_parse_date(x) for x in series])
@@ -122,14 +122,6 @@ def infer_and_convert_types(df: pd.DataFrame, reference_df: Optional[pd.DataFram
     
     return result_df
 
-def clean_csv_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean problematic characters and handle encoding issues"""
-    for col in df.columns:
-        if df[col].dtype == 'object':
-            # Replace problematic characters and clean strings
-            df[col] = df[col].apply(lambda x: str(x).strip().replace('\x00', '') if pd.notna(x) else x)
-    return df
-
 def get_sheet_data_fast(excel_path: str, sheet_name: str) -> pd.DataFrame:
     """Fast sheet reading using openpyxl in read-only mode with error handling"""
     try:
@@ -140,7 +132,8 @@ def get_sheet_data_fast(excel_path: str, sheet_name: str) -> pd.DataFrame:
         data = list(ws.iter_rows(min_row=2, values_only=True))
         wb.close()
         
-        df = pd.DataFrame(data, columns=headers)
+        # Create DataFrame with explicit string type for all columns initially
+        df = pd.DataFrame(data, columns=headers).astype(str)
         return infer_and_convert_types(df)
     except Exception as e:
         print(f"Error reading sheet {sheet_name}: {str(e)}")
