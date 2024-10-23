@@ -1,14 +1,12 @@
 import sys
-import os
 from site import getusersitepackages
-
-# Add user site-packages to sys.path
 sys.path.append(getusersitepackages())
 
 import pandas as pd
 import dask.dataframe as dd
 from tqdm import tqdm
 import glob
+import os
 import time
 
 # Start the timer
@@ -32,21 +30,22 @@ sheets_to_process = list(pattern_to_sheet.values())
 parquet_dir = os.path.join(current_dir, 'parquet_files')
 os.makedirs(parquet_dir, exist_ok=True)
 
-# Rest of your script remains the same...
-
-# Step 1: Convert Excel sheets to Parquet files (if not already converted)
+# Step 1: Convert Excel sheets to Parquet files using Dask
 print("Converting Excel sheets to Parquet files...")
 for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
-    parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+    parquet_path = os.path.join(parquet_dir, sheet_name)
     if not os.path.exists(parquet_path):
-        # Read all columns as strings to handle mixed types
+        # Read the Excel sheet into a pandas DataFrame
         df = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str)
-        df.to_parquet(parquet_path, index=False)
+        # Convert the pandas DataFrame to a Dask DataFrame
+        ddf = dd.from_pandas(df, npartitions=1)
+        # Write the Dask DataFrame to Parquet
+        ddf.to_parquet(parquet_path, write_index=False)
 
 # Step 2: Process Parquet files with Dask
 print("Processing Parquet files with Dask...")
 for sheet_name in tqdm(sheets_to_process, desc='Processing Parquet Files'):
-    parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+    parquet_path = os.path.join(parquet_dir, sheet_name)
     ddf = dd.read_parquet(parquet_path, dtype=str)
 
     # Delete rows with the oldest date in the first column
@@ -72,7 +71,7 @@ for sheet_name in tqdm(sheets_to_process, desc='Appending Data'):
             break
 
     if matched_files:
-        parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+        parquet_path = os.path.join(parquet_dir, sheet_name)
         ddf_main = dd.read_parquet(parquet_path, dtype=str)
 
         # Read and concatenate matched CSV files
@@ -87,7 +86,7 @@ for sheet_name in tqdm(sheets_to_process, desc='Appending Data'):
 print("Recombining Parquet files into Excel workbook...")
 with pd.ExcelWriter(excel_file, engine='openpyxl', mode='w') as writer:
     for sheet_name in tqdm(sheets_to_process, desc='Writing to Excel'):
-        parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+        parquet_path = os.path.join(parquet_dir, sheet_name)
         if os.path.exists(parquet_path):
             ddf = dd.read_parquet(parquet_path, dtype=str)
             df = ddf.compute()
