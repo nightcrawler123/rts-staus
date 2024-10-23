@@ -5,6 +5,10 @@ import glob
 import time
 from multiprocessing import Pool, cpu_count
 
+# Get the current working directory
+current_dir = os.getcwd()
+print(f"Current working directory: {current_dir}")
+
 # Define the mapping of CSV filename patterns to sheet names
 pattern_to_sheet = {
     'QDS-above-70-crossed-40d': 'QDS above 70 G40',
@@ -13,11 +17,12 @@ pattern_to_sheet = {
     'QDS-above-70-less-40d': 'QDS above 70 L40',
 }
 
-excel_file = 'NA Trend Report.xlsx'
+# Paths relative to the current working directory
+excel_file = os.path.join(current_dir, 'NA Trend Report.xlsx')
 sheets_to_process = list(pattern_to_sheet.values())
 
 # Create a directory to store CSV files
-csv_dir = 'temp_csv_files'
+csv_dir = os.path.join(current_dir, 'temp_csv_files')
 os.makedirs(csv_dir, exist_ok=True)
 
 def convert_sheet_to_csv(sheet_name):
@@ -46,8 +51,9 @@ def append_csv_data(sheet_name):
     for pattern, target_sheet in pattern_to_sheet.items():
         if target_sheet == sheet_name:
             # Find matching CSV files
-            for csv_file in glob.glob('*.csv'):
-                if pattern in csv_file:
+            csv_files = glob.glob(os.path.join(current_dir, '*.csv'))
+            for csv_file in csv_files:
+                if pattern in os.path.basename(csv_file):
                     matched_files.append(csv_file)
             break
 
