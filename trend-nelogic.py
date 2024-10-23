@@ -2,12 +2,16 @@ import sys
 from site import getusersitepackages
 sys.path.append(getusersitepackages())
 
-import vaex
+import polars as pl
 import pandas as pd
 import os
 from tqdm import tqdm
 import glob
 import time
+
+# Suppress Polars warnings (optional)
+import warnings
+warnings.filterwarnings('ignore')
 
 # Start the timer
 start_time = time.time()
@@ -31,13 +35,14 @@ output_excel_file = os.path.join(current_dir, 'NA Trend Report Processed.xlsx')
 
 sheets_to_process = list(pattern_to_sheet.values())
 
-hdf5_dir = os.path.join(current_dir, 'hdf5_files')
-os.makedirs(hdf5_dir, exist_ok=True)
+# Create a directory to store temporary Parquet files
+parquet_dir = os.path.join(current_dir, 'parquet_files')
+os.makedirs(parquet_dir, exist_ok=True)
 
-# Step 1: Convert Excel sheets to HDF5 files
-print("Converting Excel sheets to HDF5 files...")
+# Step 1: Convert Excel sheets to Parquet files
+print("Converting Excel sheets to Parquet files...")
 for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
-    hdf5_path = os.path.join(hdf5_dir, f"{sheet_name}.hdf5")
+    parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
     # Read Excel sheet with mangle_dupe_cols=True to handle duplicate columns
     df = pd.read_excel(
         excel_file,
@@ -45,31 +50,49 @@ for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
         dtype=str,
         mangle_dupe_cols=True  # This will rename duplicate columns
     )
-    # Convert all columns to strings to handle mixed types
+    # Handle missing values
+    df = df.fillna('')
+
+    # Clean column names
+    df.columns = [col.strip().replace('\n', ' ').replace('\r', ' ') for col in df.columns]
+
+    # Remove special characters from column names
+    df.columns = [col.encode('ascii', 'ignore').decode('ascii') for col in df.columns]
+
+    # Remove special characters from data and convert all columns to strings
     for col in df.columns:
         df[col] = df[col].astype(str)
-    # Convert the pandas DataFrame to a Vaex DataFrame
-    vaex_df = vaex.from_pandas(df, copy_index=False)
-    # Export the Vaex DataFrame to HDF5
-    vaex_df.export_hdf5(hdf5_path, progress=False)
+        df[col] = df[col].str.encode('ascii', 'ignore').str.decode('ascii')
 
-# Step 2: Process HDF5 files with Vaex
-print("Processing HDF5 files with Vaex...")
-for sheet_name in tqdm(sheets_to_process, desc='Processing HDF5 Files'):
-    hdf5_path = os.path.join(hdf5_dir, f"{sheet_name}.hdf5")
-    vdf = vaex.open(hdf5_path)
+    # Convert pandas DataFrame to Polars DataFrame
+    pl_df = pl.from_pandas(df)
+
+    # Write Polars DataFrame to Parquet
+    pl_df.write_parquet(parquet_path)
+
+# Step 2: Process Parquet files with Polars
+print("Processing Parquet files with Polars...")
+for sheet_name in tqdm(sheets_to_process, desc='Processing Parquet Files'):
+    parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+    pl_df = pl.read_parquet(parquet_path)
 
     # Convert the first column to datetime
-    first_col = vdf.column_names[0]
-    vdf[first_col] = vdf[first_col].astype('datetime64[ns]')
+    first_col = pl_df.columns[0]
+    pl_df = pl_df.with_column(
+        pl.col(first_col)
+        .str.strip()
+        .str.strptime(pl.Datetime, fmt="%Y-%m-%d", strict=False)
+        .alias(first_col)
+    )
 
     # Get the oldest date
-    oldest_date = vdf[first_col].min()
-    # Filter out rows with the oldest date
-    vdf = vdf[vdf[first_col] != oldest_date]
+    oldest_date = pl_df.select(pl.col(first_col).min()).to_series()[0]
 
-    # Save the cleaned data back to HDF5
-    vdf.export_hdf5(hdf5_path, progress=False)
+    # Filter out rows with the oldest date
+    pl_df = pl_df.filter(pl.col(first_col) != oldest_date)
+
+    # Write the cleaned data back to Parquet
+    pl_df.write_parquet(parquet_path)
 
 # Step 3: Append data from other CSV files
 print("Appending data from CSV files...")
@@ -85,37 +108,49 @@ for sheet_name in tqdm(sheets_to_process, desc='Appending Data'):
             break
 
     if matched_files:
-        hdf5_path = os.path.join(hdf5_dir, f"{sheet_name}.hdf5")
-        vdf_main = vaex.open(hdf5_path)
+        parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+        pl_df = pl.read_parquet(parquet_path)
 
         # Read and concatenate matched CSV files
         for csv_file in matched_files:
-            vdf_csv = vaex.from_csv(csv_file, skiprows=1, convert=True, chunk_size=5_000_000)
-            # Convert all columns to strings to handle mixed types
-            for col in vdf_csv.get_column_names():
-                vdf_csv[col] = vdf_csv[col].astype(str)
-            vdf_main = vdf_main.concat(vdf_csv)
+            # Read CSV file, skip first row (header), handle missing values, inconsistent data types, special characters
+            csv_df = pd.read_csv(csv_file, skiprows=1, header=None, dtype=str)
+            csv_df = csv_df.fillna('')
 
-        # Save the combined data back to HDF5
-        vdf_main.export_hdf5(hdf5_path, progress=False)
+            # Clean column names if needed
+            # Since CSV files have no headers after skiprows=1, we need to assign column names
+            csv_df.columns = pl_df.columns[:len(csv_df.columns)]
 
-# Step 4: Recombine HDF5 files into a new Excel workbook
-print("Recombining HDF5 files into a new Excel workbook...")
+            # Remove special characters from data and convert all columns to strings
+            for col in csv_df.columns:
+                csv_df[col] = csv_df[col].astype(str)
+                csv_df[col] = csv_df[col].str.encode('ascii', 'ignore').str.decode('ascii')
+
+            # Convert pandas DataFrame to Polars DataFrame
+            pl_csv_df = pl.from_pandas(csv_df)
+
+            # Append to the main DataFrame
+            pl_df = pl.concat([pl_df, pl_csv_df], how='vertical')
+
+        # Write the combined data back to Parquet
+        pl_df.write_parquet(parquet_path)
+
+# Step 4: Recombine Parquet files into a new Excel workbook
+print("Recombining Parquet files into a new Excel workbook...")
 with pd.ExcelWriter(output_excel_file, engine='openpyxl', mode='w') as writer:
     for sheet_name in tqdm(sheets_to_process, desc='Writing to Excel'):
-        hdf5_path = os.path.join(hdf5_dir, f"{sheet_name}.hdf5")
-        if os.path.exists(hdf5_path):
-            vdf = vaex.open(hdf5_path)
-            # Convert Vaex DataFrame to pandas DataFrame
-            df = vdf.to_pandas_df()
-            # Ensure all columns are strings to handle mixed types
-            for col in df.columns:
-                df[col] = df[col].astype(str)
+        parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
+        if os.path.exists(parquet_path):
+            pl_df = pl.read_parquet(parquet_path)
+            # Convert Polars DataFrame to pandas DataFrame
+            df = pl_df.to_pandas()
+            # Ensure all columns are strings
+            df = df.astype(str)
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-# Optional: Remove the hdf5_files directory after processing
+# Optional: Remove the parquet_files directory after processing
 # import shutil
-# shutil.rmtree(hdf5_dir)
+# shutil.rmtree(parquet_dir)
 
 # Calculate and display the total execution time
 end_time = time.time()
