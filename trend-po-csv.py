@@ -169,13 +169,9 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             # Read CSV with Polars, setting truncate_ragged_lines=True to handle extra fields
             try:
                 pl_df = pl.read_csv(csv_file, truncate_ragged_lines=True)
-            except pl.exceptions.ParserError as pe:  # Corrected exception reference
-                logging.error(f"Parser error in CSV '{csv_file}': {pe}")
-                print(f"Parser error in CSV '{csv_file}': {pe}")
-                continue
-            except Exception as e:
-                logging.error(f"Unexpected error reading CSV '{csv_file}': {e}")
-                print(f"Unexpected error reading CSV '{csv_file}': {e}")
+            except Exception as e:  # Use generic exception to catch any issues
+                logging.error(f"Error reading CSV '{csv_file}': {e}")
+                print(f"Error reading CSV '{csv_file}': {e}")
                 continue
     
             if pl_df.is_empty():
@@ -274,13 +270,9 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
                 try:
                     pl_df = pl.read_csv(processed_csv, truncate_ragged_lines=True)
                     excel_dfs[sheet] = pl_df
-                except pl.exceptions.ParserError as pe:  # Corrected exception reference
-                    logging.error(f"Parser error in processed CSV '{processed_csv}': {pe}")
-                    print(f"Parser error in processed CSV '{processed_csv}': {pe}")
-                    continue
-                except Exception as e:
-                    logging.error(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
-                    print(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
+                except Exception as e:  # Use generic exception to catch any issues
+                    logging.error(f"Error reading processed CSV '{processed_csv}': {e}")
+                    print(f"Error reading processed CSV '{processed_csv}': {e}")
                     continue
             else:
                 logging.warning(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
@@ -304,13 +296,9 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
             # Read the processed CSV
             try:
                 pl_df_new = pl.read_csv(processed_csv, truncate_ragged_lines=True)
-            except pl.exceptions.ParserError as pe:  # Corrected exception reference
-                logging.error(f"Parser error in processed CSV '{processed_csv}': {pe}")
-                print(f"Parser error in processed CSV '{processed_csv}': {pe}")
-                continue
-            except Exception as e:
-                logging.error(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
-                print(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
+            except Exception as e:  # Use generic exception to catch any issues
+                logging.error(f"Error reading processed CSV '{processed_csv}': {e}")
+                print(f"Error reading processed CSV '{processed_csv}': {e}")
                 continue
     
             # Append to the existing DataFrame
