@@ -5,6 +5,7 @@ import glob
 import os
 from tqdm import tqdm
 import time
+from datetime import datetime
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 import gc
@@ -23,9 +24,6 @@ def add_user_site_packages():
             sys.path.append(user_site)
 
 add_user_site_packages()
-
-# Start time at the very beginning of the script
-start_time = time.time()
 
 def delete_oldest_date_rows(sheet_df):
     """
@@ -63,90 +61,60 @@ def map_csv_to_sheet(csv_filename):
     else:
         return None  # No matching sheet
 
-def process_excel_sheets(wb):
+def process_excel_sheet(sheet_name, input_workbook):
     """
-    Process each sheet in the workbook to delete rows with the oldest date.
-    Converts all columns to strings to handle mixed-type columns.
+    Process a single Excel sheet: delete oldest date rows.
     """
-    for sheet_name in tqdm(wb.sheetnames, desc="Processing Excel Sheets", unit="sheet"):
-        ws = wb[sheet_name]
-        # Read the sheet data into a DataFrame
-        data = ws.values
-        try:
-            columns = next(data)  # Assumes first row is header
-        except StopIteration:
-            # Empty sheet
-            continue
-        df = pd.DataFrame(data, columns=columns)
-        
-        # Delete rows with the oldest date
-        df = delete_oldest_date_rows(df)
-        
-        # Convert all columns to strings
-        df = df.astype(str)
-        
-        # Clear existing data in the sheet (except header)
-        ws.delete_rows(2, ws.max_row)
-        
-        if not df.empty:
-            # Append updated DataFrame to the sheet
-            for row in dataframe_to_rows(df, index=False, header=False):
-                ws.append(row)
-        
-        # Force garbage collection
-        del df
-        gc.collect()
-
-def append_csv_to_sheet(wb, csv_file):
-    """
-    Append data from a CSV file to the corresponding sheet in the workbook.
-    Converts all columns to strings to handle mixed-type columns.
-    """
-    sheet_name = map_csv_to_sheet(os.path.basename(csv_file))
-    if not sheet_name:
-        # Skip CSV files that do not match any pattern
-        return
-    
-    if sheet_name not in wb.sheetnames:
-        # Skip if the mapped sheet does not exist
-        return
-    
-    ws = wb[sheet_name]
-    
-    # Determine if the sheet already has data
-    max_row = ws.max_row
-    
-    # Read CSV in chunks
-    chunk_size = 10000  # Adjust based on memory and performance
+    ws = input_workbook[sheet_name]
+    # Read the sheet data into a DataFrame
+    data = ws.values
     try:
+        columns = next(data)  # Assumes first row is header
+    except StopIteration:
+        # Empty sheet
+        return pd.DataFrame()  # Return empty DataFrame
+    
+    df = pd.DataFrame(data, columns=columns)
+    
+    # Delete rows with the oldest date
+    df = delete_oldest_date_rows(df)
+    
+    # Convert all columns to strings
+    df = df.astype(str)
+    
+    # Return the processed DataFrame
+    return df
+
+def append_csv_data(df, csv_file):
+    """
+    Append data from a CSV file to the DataFrame.
+    """
+    try:
+        # Read CSV in chunks to handle large files
+        chunk_size = 10000  # Adjust based on memory and performance
         for chunk in pd.read_csv(csv_file, chunksize=chunk_size, dtype=str):
-            # If the sheet already has data and this is the first chunk, skip header
-            if max_row > 1:
+            # If DataFrame already has data, skip header row in CSV
+            if not df.empty:
                 chunk = chunk.iloc[1:]  # Skip header row
             if chunk.empty:
                 continue  # Skip empty chunks
-            # Append chunk to the sheet
-            for row in dataframe_to_rows(chunk, index=False, header=False):
-                ws.append(row)
-            # Update max_row to reflect newly added rows
-            max_row = ws.max_row
+            df = pd.concat([df, chunk], ignore_index=True)
             # Force garbage collection after each chunk
             del chunk
             gc.collect()
     except pd.errors.EmptyDataError:
         # Handle empty CSV files gracefully
         pass
-
-def process_csv_files(wb, csv_files):
-    """
-    Process and append all CSV files to their respective sheets.
-    """
-    for csv_file in tqdm(csv_files, desc="Processing CSV Files", unit="file"):
-        append_csv_to_sheet(wb, csv_file)
-        # Force garbage collection after processing each file
-        gc.collect()
+    return df
 
 def main():
+    # Display current time at the start
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Script started at: {current_time}")
+    
+    # Start time for total execution time
+    start_time = time.time()
+    
     # Define the input and output Excel file paths
     input_excel_file = 'NA Trend Report.xlsx'
     output_excel_file = 'NA Trend Report Updated.xlsx'
@@ -154,29 +122,54 @@ def main():
     # Find all processed CSV files in the current directory
     csv_files = glob.glob('processed_*.csv')
     
-    # Load the workbook
+    if not csv_files:
+        print("No processed CSV files found. Exiting script.")
+        return
+    
+    # Create a mapping from sheet names to their corresponding CSV files
+    sheet_csv_mapping = {}
+    for csv_file in csv_files:
+        sheet_name = map_csv_to_sheet(os.path.basename(csv_file))
+        if sheet_name:
+            if sheet_name not in sheet_csv_mapping:
+                sheet_csv_mapping[sheet_name] = []
+            sheet_csv_mapping[sheet_name].append(csv_file)
+    
+    # Load the input workbook
     print("Loading the Excel workbook...")
-    wb = load_workbook(input_excel_file)
+    input_wb = load_workbook(input_excel_file, read_only=True, data_only=True)
+    sheet_names = input_wb.sheetnames
     
-    # Step 1: Delete rows with the oldest date from all sheets
-    print("Deleting rows with the oldest date from all sheets...")
-    process_excel_sheets(wb)
+    # Initialize the output workbook using pandas ExcelWriter
+    with pd.ExcelWriter(output_excel_file, engine='openpyxl') as writer:
+        # Iterate through each sheet and process
+        for sheet_name in tqdm(sheet_names, desc="Processing Excel Sheets", unit="sheet"):
+            # Process the sheet to delete oldest date rows
+            df = process_excel_sheet(sheet_name, input_wb)
+            
+            # If there are corresponding CSV files, append their data
+            if sheet_name in sheet_csv_mapping:
+                for csv_file in sheet_csv_mapping[sheet_name]:
+                    df = append_csv_data(df, csv_file)
+            
+            # Write the processed DataFrame to the new Excel workbook
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            # Force garbage collection after each sheet
+            del df
+            gc.collect()
     
-    # Step 2: Append CSV data to corresponding sheets
-    print("Appending CSV data to corresponding sheets...")
-    process_csv_files(wb, csv_files)
-    
-    # Save the workbook as a new file
-    print(f"Saving the updated Excel workbook as '{output_excel_file}'...")
-    wb.save(output_excel_file)
-    
-    # Close the workbook
-    wb.close()
+    # Close the input workbook
+    input_wb.close()
     
     # Calculate and display the total time taken
     end_time = time.time()
     total_time = end_time - start_time
     print(f"Processing completed in {total_time:.2f} seconds.")
+    
+    # Display end time
+    end_time_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Script ended at: {end_time_datetime}")
 
 if __name__ == "__main__":
     main()
