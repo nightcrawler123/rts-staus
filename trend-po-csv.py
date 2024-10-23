@@ -56,7 +56,7 @@ print("Optimized Script started.")
 
 def map_csv_to_sheet(sheet_name):
     """
-    Maps a sheet name to its corresponding processed CSV filename.
+    Maps a sheet name to itself.
     Since CSVs are generated from sheet names, mapping is direct.
     """
     return sheet_name
@@ -112,8 +112,8 @@ def convert_excel_to_csv(excel_path, temp_dir):
         for sheet in tqdm(sheet_names, desc="Converting Sheets to CSV"):
             ws = wb[sheet]
             # Replace any characters in sheet name that are invalid in filenames
-            safe_sheet_name = "".join([c if c.isalnum() or c in " _-" else "_" for c in sheet])
-            csv_path = os.path.join(temp_dir, f"{safe_sheet_name}.csv")
+            # Here, we assume sheet names are safe. If not, implement sanitation.
+            csv_path = os.path.join(temp_dir, f"{sheet}.csv")
     
             # Read the sheet data
             data = ws.values
@@ -166,8 +166,13 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
                 logging.warning(f"No corresponding Excel sheet for CSV '{csv_file}'. Skipping.")
                 continue
     
-            # Read CSV with Polars
-            pl_df = pl.read_csv(csv_file)
+            # Read CSV with Polars, setting truncate_ragged_lines=True to handle extra fields
+            try:
+                pl_df = pl.read_csv(csv_file, truncate_ragged_lines=True)
+            except pl.errors.ParserError as pe:
+                logging.error(f"Parser error in CSV '{csv_file}': {pe}")
+                print(f"Parser error in CSV '{csv_file}': {pe}")
+                continue
     
             if pl_df.is_empty():
                 print(f"CSV file '{csv_file}' is empty. Skipping.")
@@ -232,8 +237,7 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             pl_df = pl_df.select(original_columns)
     
             # Save processed CSV
-            safe_sheet_name = "".join([c if c.isalnum() or c in " _-" else "_" for c in target_sheet])
-            processed_csv_path = os.path.join(processed_dir, f"{safe_sheet_name}_processed.csv")
+            processed_csv_path = os.path.join(processed_dir, f"{sheet_name}_processed.csv")
             pl_df.write_csv(processed_csv_path)
             logging.info(f"Processed CSV saved at '{processed_csv_path}'")
             print(f"Processed CSV saved at '{processed_csv_path}'")
@@ -261,7 +265,7 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
         for sheet, cols in original_excel_columns.items():
             original_csv = os.path.join(processed_dir, f"{sheet}_processed.csv")
             if os.path.exists(original_csv):
-                pl_df = pl.read_csv(original_csv)
+                pl_df = pl.read_csv(original_csv, truncate_ragged_lines=True)
                 excel_dfs[sheet] = pl_df
             else:
                 logging.warning(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
@@ -283,7 +287,12 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
                 continue
     
             # Read the processed CSV
-            pl_df_new = pl.read_csv(processed_csv)
+            try:
+                pl_df_new = pl.read_csv(processed_csv, truncate_ragged_lines=True)
+            except pl.errors.ParserError as pe:
+                logging.error(f"Parser error in processed CSV '{processed_csv}': {pe}")
+                print(f"Parser error in processed CSV '{processed_csv}': {pe}")
+                continue
     
             # Append to the existing DataFrame
             excel_dfs[target_sheet] = pl.concat([excel_dfs[target_sheet], pl_df_new], how="vertical")
