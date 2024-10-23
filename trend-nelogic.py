@@ -111,7 +111,7 @@ def read_excel_sheets(excel_path):
             # Convert the rest of the data into a list of rows
             data_rows = list(data)
 
-            # Create Polars DataFrame
+            # Create Polars DataFrame with explicit schema
             try:
                 df = pl.DataFrame(data_rows, schema=columns)
             except Exception as e:
@@ -125,6 +125,9 @@ def read_excel_sheets(excel_path):
 
             # Handle Special Characters
             df = handle_special_characters(df)
+
+            # Handle Duplicate Rows
+            df = handle_duplicate_rows(df, sheet_name)
 
             # Log missing values
             log_missing_values(df, sheet_name)
@@ -197,6 +200,24 @@ def handle_special_characters(df):
         print(f"Error handling special characters: {e}")
         return df
 
+def handle_duplicate_rows(df, sheet_name):
+    """
+    Removes duplicate rows from the DataFrame.
+    """
+    try:
+        initial_count = df.height
+        df = df.unique()
+        final_count = df.height
+        duplicates_removed = initial_count - final_count
+        if duplicates_removed > 0:
+            logging.info(f"Sheet '{sheet_name}': Removed {duplicates_removed} duplicate rows.")
+            print(f"Sheet '{sheet_name}': Removed {duplicates_removed} duplicate rows.")
+        return df
+    except Exception as e:
+        logging.error(f"Error handling duplicate rows in sheet '{sheet_name}': {e}")
+        print(f"Error handling duplicate rows in sheet '{sheet_name}': {e}")
+        return df
+
 def log_missing_values(df, sheet_name):
     """
     Logs the count of missing values per column in the DataFrame.
@@ -237,6 +258,9 @@ def read_csv_file(csv_path):
         # Handle Special Characters
         df = handle_special_characters(df)
 
+        # Handle Duplicate Rows
+        df = handle_duplicate_rows_csv(df, csv_path)
+
         # Log missing values
         log_missing_values_csv(df, csv_path)
 
@@ -248,6 +272,24 @@ def read_csv_file(csv_path):
         logging.error(f"Unexpected error reading CSV file '{csv_path}': {e}")
         print(f"Unexpected error reading CSV file '{csv_path}': {e}")
     return None
+
+def handle_duplicate_rows_csv(df, csv_path):
+    """
+    Removes duplicate rows from the CSV DataFrame.
+    """
+    try:
+        initial_count = df.height
+        df = df.unique()
+        final_count = df.height
+        duplicates_removed = initial_count - final_count
+        if duplicates_removed > 0:
+            logging.info(f"CSV '{csv_path}': Removed {duplicates_removed} duplicate rows.")
+            print(f"CSV '{csv_path}': Removed {duplicates_removed} duplicate rows.")
+        return df
+    except Exception as e:
+        logging.error(f"Error handling duplicate rows in CSV '{csv_path}': {e}")
+        print(f"Error handling duplicate rows in CSV '{csv_path}': {e}")
+        return df
 
 def log_missing_values_csv(df, csv_path):
     """
