@@ -108,6 +108,9 @@ def append_csv_data(df, csv_file):
     return df
 
 def main():
+    # Display current working directory
+    print(f"Current working directory: {os.getcwd()}")
+    
     # Display current time at the start
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"Script started at: {current_time}")
@@ -119,11 +122,19 @@ def main():
     input_excel_file = 'NA Trend Report.xlsx'
     output_excel_file = 'NA Trend Report Updated.xlsx'
     
-    # Find all processed CSV files in the current directory
-    csv_files = glob.glob('processed_*.csv')
+    # Verify that the input Excel file exists
+    if not os.path.isfile(input_excel_file):
+        print(f"Input Excel file '{input_excel_file}' not found in the current directory.")
+        return
+    
+    # Find all CSV files in the current directory
+    csv_files = glob.glob('*.csv')  # Changed from 'processed_*.csv' to '*.csv'
+    
+    # Debugging: Print the list of CSV files found
+    print(f"CSV files found: {csv_files}")
     
     if not csv_files:
-        print("No processed CSV files found. Exiting script.")
+        print("No CSV files found. Exiting script.")
         return
     
     # Create a mapping from sheet names to their corresponding CSV files
@@ -135,10 +146,25 @@ def main():
                 sheet_csv_mapping[sheet_name] = []
             sheet_csv_mapping[sheet_name].append(csv_file)
     
+    # Debugging: Print the mapping
+    print("Sheet to CSV mapping:")
+    for sheet, files in sheet_csv_mapping.items():
+        print(f"  {sheet}: {files}")
+    
+    if not sheet_csv_mapping:
+        print("No CSV files match the expected naming patterns. Exiting script.")
+        return
+    
     # Load the input workbook
     print("Loading the Excel workbook...")
-    input_wb = load_workbook(input_excel_file, read_only=True, data_only=True)
+    try:
+        input_wb = load_workbook(input_excel_file, read_only=True, data_only=True)
+    except Exception as e:
+        print(f"Error loading workbook: {e}")
+        return
+    
     sheet_names = input_wb.sheetnames
+    print(f"Sheets in workbook: {sheet_names}")
     
     # Initialize the output workbook using pandas ExcelWriter
     with pd.ExcelWriter(output_excel_file, engine='openpyxl') as writer:
@@ -150,6 +176,7 @@ def main():
             # If there are corresponding CSV files, append their data
             if sheet_name in sheet_csv_mapping:
                 for csv_file in sheet_csv_mapping[sheet_name]:
+                    print(f"Appending data from '{csv_file}' to sheet '{sheet_name}'")
                     df = append_csv_data(df, csv_file)
             
             # Write the processed DataFrame to the new Excel workbook
