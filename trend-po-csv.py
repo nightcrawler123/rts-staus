@@ -41,14 +41,14 @@ import pandas as pd
 
 # Setup logging at the very beginning to capture all events
 logging.basicConfig(
-    filename='data_processing_optimized.log',
+    filename='data_processing_optimized_corrected.log',  # Updated log filename for clarity
     filemode='w',  # Overwrite log file each run
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-logging.info("Optimized Script started.")
-print("Optimized Script started.")
+logging.info("Optimized Script Started.")
+print("Optimized Script Started.")
 
 # ==========================
 # 2. Define CSV to Sheet Mapping
@@ -169,9 +169,13 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             # Read CSV with Polars, setting truncate_ragged_lines=True to handle extra fields
             try:
                 pl_df = pl.read_csv(csv_file, truncate_ragged_lines=True)
-            except pl.errors.ParserError as pe:
+            except pl.exceptions.ParserError as pe:  # Corrected exception reference
                 logging.error(f"Parser error in CSV '{csv_file}': {pe}")
                 print(f"Parser error in CSV '{csv_file}': {pe}")
+                continue
+            except Exception as e:
+                logging.error(f"Unexpected error reading CSV '{csv_file}': {e}")
+                print(f"Unexpected error reading CSV '{csv_file}': {e}")
                 continue
     
             if pl_df.is_empty():
@@ -209,7 +213,9 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
                     mean_val = pl_df[col].mean()
                     pl_df = pl_df.with_columns(pl.col(col).fill_null(mean_val))
                 elif pl_df[col].dtype == pl.Date:
-                    pl_df = pl_df.with_columns(pl.lit(datetime(1970, 1, 1)).cast(pl.Date).alias(col).fill_null(datetime(1970, 1, 1)))
+                    pl_df = pl_df.with_columns(
+                        pl.lit(datetime(1970, 1, 1)).cast(pl.Date).alias(col).fill_null(datetime(1970, 1, 1))
+                    )
                 else:
                     pl_df = pl_df.with_columns(pl.col(col).fill_null("Unknown"))
     
@@ -263,10 +269,19 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
         # Load the original Excel data into Polars DataFrames
         excel_dfs = {}
         for sheet, cols in original_excel_columns.items():
-            original_csv = os.path.join(processed_dir, f"{sheet}_processed.csv")
-            if os.path.exists(original_csv):
-                pl_df = pl.read_csv(original_csv, truncate_ragged_lines=True)
-                excel_dfs[sheet] = pl_df
+            processed_csv = os.path.join(processed_dir, f"{sheet}_processed.csv")
+            if os.path.exists(processed_csv):
+                try:
+                    pl_df = pl.read_csv(processed_csv, truncate_ragged_lines=True)
+                    excel_dfs[sheet] = pl_df
+                except pl.exceptions.ParserError as pe:  # Corrected exception reference
+                    logging.error(f"Parser error in processed CSV '{processed_csv}': {pe}")
+                    print(f"Parser error in processed CSV '{processed_csv}': {pe}")
+                    continue
+                except Exception as e:
+                    logging.error(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
+                    print(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
+                    continue
             else:
                 logging.warning(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
                 print(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
@@ -289,9 +304,13 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
             # Read the processed CSV
             try:
                 pl_df_new = pl.read_csv(processed_csv, truncate_ragged_lines=True)
-            except pl.errors.ParserError as pe:
+            except pl.exceptions.ParserError as pe:  # Corrected exception reference
                 logging.error(f"Parser error in processed CSV '{processed_csv}': {pe}")
                 print(f"Parser error in processed CSV '{processed_csv}': {pe}")
+                continue
+            except Exception as e:
+                logging.error(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
+                print(f"Unexpected error reading processed CSV '{processed_csv}': {e}")
                 continue
     
             # Append to the existing DataFrame
