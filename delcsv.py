@@ -29,9 +29,8 @@ for file in os.listdir():
         # Insert the new column with today's date at the start of the dataframe
         df.insert(0, 'Date', today_date)
         
-        # Save the modified file
-        output_file = f"processed_{file}"
-        df.to_csv(output_file, index=False)
-        print(f"File saved as: {output_file}")
+        # Save the modified file (overwrite the original file)
+        df.to_csv(file, index=False)
+        print(f"File overwritten and saved: {file}")
 
 print("Processing complete.")
