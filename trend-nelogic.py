@@ -85,9 +85,9 @@ def infer_and_convert_types(df: pd.DataFrame, reference_df: Optional[pd.DataFram
     
     def convert_column(col: str, series: pd.Series) -> pd.Series:
         # First check if it's a date column
-        if col.lower().contains('date') or (
+        if 'date' in col.lower() or (
             series.dtype == 'object' and 
-            series.dropna().str.contains(r'\d{4}-\d{2}-\d{2}').any()
+            series.dropna().astype(str).str.contains(r'\d{4}-\d{2}-\d{2}').any()
         ):
             return pd.Series([safe_parse_date(x) for x in series])
         
@@ -146,6 +146,23 @@ def get_sheet_data_fast(excel_path: str, sheet_name: str) -> pd.DataFrame:
         print(f"Error reading sheet {sheet_name}: {str(e)}")
         return pd.DataFrame()
 
+def process_sheet_parallel(args):
+    """Process single sheet in parallel"""
+    excel_path, sheet_name = args
+    try:
+        return sheet_name, get_sheet_data_fast(excel_path, sheet_name)
+    except Exception as e:
+        print(f"Error processing sheet {sheet_name}: {e}")
+        return sheet_name, pd.DataFrame()
+
+def get_oldest_date(df):
+    """Get oldest date from DataFrame efficiently with type checking"""
+    try:
+        date_col = pd.to_datetime(df.iloc[:, 0], errors='coerce')
+        return date_col.dropna().min()
+    except:
+        return None
+
 def process_csv_file(csv_file: str, pattern: str, sheet_name: str, excel_data: Dict[str, pd.DataFrame]) -> Optional[pd.DataFrame]:
     """Process single CSV file with robust error handling"""
     try:
@@ -180,6 +197,56 @@ def process_csv_file(csv_file: str, pattern: str, sheet_name: str, excel_data: D
             print(f"Second attempt failed: {str(e2)}")
             return None
 
+def process_excel_file(excel_path):
+    """Process Excel file using parallel processing"""
+    print("Loading Excel file efficiently...")
+    
+    # Get sheet names
+    wb = load_workbook(filename=excel_path, read_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+    
+    # Process sheets in parallel
+    with ThreadPoolExecutor() as executor:
+        sheet_data = list(tqdm(
+            executor.map(process_sheet_parallel, 
+                        [(excel_path, sheet) for sheet in sheet_names]),
+            total=len(sheet_names),
+            desc="Reading sheets"
+        ))
+    
+    # Convert to dictionary
+    excel_data = dict(sheet_data)
+    
+    # Find oldest date using parallel processing
+    print("Finding oldest date...")
+    dates = []
+    for df in excel_data.values():
+        if not df.empty:
+            date = get_oldest_date(df)
+            if date is not None:
+                dates.append(date)
+    
+    oldest_date = min(dates) if dates else None
+    if oldest_date is None:
+        raise ValueError("No valid dates found")
+    
+    print(f"Oldest date found: {oldest_date}")
+    
+    # Remove oldest date rows in parallel
+    def filter_dates(df):
+        if df.empty:
+            return df
+        try:
+            return df[pd.to_datetime(df.iloc[:, 0], errors='coerce') > oldest_date]
+        except:
+            return df
+    
+    with ThreadPoolExecutor() as executor:
+        filtered_data = list(executor.map(filter_dates, excel_data.values()))
+    
+    return dict(zip(excel_data.keys(), filtered_data))
+
 def main():
     timer = Timer()
     
@@ -189,30 +256,16 @@ def main():
         excel_path = os.path.join(cwd, "NA Trend Report.xlsx")
         
         # Process Excel file
-        print("Loading Excel file...")
-        wb = load_workbook(filename=excel_path, read_only=True)
-        sheet_names = wb.sheetnames
-        wb.close()
-        
-        excel_data = {}
-        with ThreadPoolExecutor() as executor:
-            future_to_sheet = {
-                executor.submit(get_sheet_data_fast, excel_path, sheet_name): sheet_name 
-                for sheet_name in sheet_names
-            }
-            
-            for future in tqdm(as_completed(future_to_sheet), 
-                             total=len(sheet_names), 
-                             desc="Reading sheets"):
-                sheet_name = future_to_sheet[future]
-                try:
-                    excel_data[sheet_name] = future.result()
-                except Exception as e:
-                    print(f"Error processing sheet {sheet_name}: {str(e)}")
-        
+        excel_data = process_excel_file(excel_path)
         timer.mark_stage("Excel Processing")
         
-        # Process CSV files
+        # Print data types for debugging
+        print("\nExcel sheet data types:")
+        for sheet_name, df in excel_data.items():
+            print(f"\n{sheet_name} types:")
+            print(df.dtypes)
+        
+        # Get CSV files and mapping
         csv_files = glob.glob(os.path.join(cwd, "*.csv"))
         mapping = {
             'QDS-above-70-crossed-40d': 'QDS above 70 G40',
@@ -221,6 +274,7 @@ def main():
             'QDS-above-70-less-40d': 'QDS above 70 L40'
         }
         
+        # Process CSV files in parallel
         print("\nProcessing CSV files...")
         csv_tasks = []
         for csv_file in csv_files:
@@ -254,7 +308,7 @@ def main():
         
         timer.mark_stage("CSV Processing")
         
-        # Save results
+        # Save results efficiently
         print("\nSaving results...")
         with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
             for sheet_name, data in tqdm(excel_data.items(), desc="Saving sheets"):
