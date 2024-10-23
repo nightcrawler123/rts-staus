@@ -4,6 +4,10 @@ import site
 import warnings
 warnings.filterwarnings('ignore')
 
+#packages required to run this version usees the user package location
+#pip install --user pandas openpyxl tqdm dask numpy
+#pip install pandas openpyxl tqdm dask numpy
+
 # Add user's site-packages to path
 user_site_packages = site.getusersitepackages()
 if user_site_packages not in sys.path:
