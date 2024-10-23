@@ -34,7 +34,7 @@ install_packages(required_packages)
 import polars as pl
 import pandas as pd
 
-# Setup logging
+# Setup logging at the very beginning to capture all events
 logging.basicConfig(
     filename='data_processing.log',
     filemode='w',  # Overwrite log file each run
@@ -112,7 +112,13 @@ def read_excel_sheets(excel_path):
             data_rows = list(data)
 
             # Create Polars DataFrame
-            df = pl.DataFrame(data_rows, schema=columns)
+            try:
+                df = pl.DataFrame(data_rows, schema=columns)
+            except Exception as e:
+                logging.error(f"Error creating Polars DataFrame for sheet '{sheet_name}': {e}")
+                print(f"Error creating DataFrame for sheet '{sheet_name}': {e}")
+                polars_dict[sheet_name] = pl.DataFrame()
+                continue
 
             # Handle Missing Values
             df = handle_missing_values(df)
@@ -134,6 +140,7 @@ def read_excel_sheets(excel_path):
             # Free memory
             del ws
             del data_rows
+            del data
             gc.collect()
         print("Completed reading all Excel sheets.")
         wb.close()
@@ -146,7 +153,7 @@ def handle_missing_values(df):
     """
     Handles missing values in the DataFrame.
     For numerical columns, fills missing values with the mean.
-    For categorical/text columns, fills missing values with 'Unknown'.
+    For categorical/textual missing values, fills with 'Unknown'.
     """
     try:
         for col in df.columns:
