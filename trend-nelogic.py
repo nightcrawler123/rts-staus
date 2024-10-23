@@ -1,173 +1,329 @@
 import sys
+import subprocess
+import importlib
 import os
 import glob
-import time
-import dask.dataframe as dd
-import pandas as pd
-from openpyxl import load_workbook
+import logging
+from datetime import datetime
+import shutil
+
+# List of required packages
+required_packages = [
+    'polars',
+    'tqdm',
+    'openpyxl',
+    'pyarrow',
+    'pandas'  # Needed for Excel writing compatibility
+]
+
+# Function to install missing packages
+def install_packages(packages):
+    for package in packages:
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            print(f"Package '{package}' not found. Installing...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# Install missing packages
+install_packages(required_packages)
+
+# Now import the installed packages
+import polars as pl
 from tqdm import tqdm
-from dask.diagnostics import ProgressBar
-from datetime import datetime, timedelta
-import site
+import pandas as pd
 
-# Add user's site-packages to path if not found in global
-user_site_packages = site.getusersitepackages()
-if user_site_packages not in sys.path:
-    sys.path.append(user_site_packages)
+# Setup logging
+logging.basicConfig(
+    filename='data_processing.log',
+    filemode='a',
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Timer class for tracking execution time
-class Timer:
-    """Class to track execution time of different stages."""
-    def __init__(self):
-        self.start_time = time.time()
-        self.stage_times = {}
-
-    def mark_stage(self, stage_name):
-        current_time = time.time()
-        self.stage_times[stage_name] = current_time - self.start_time
-        return current_time - self.start_time
-
-    def print_summary(self):
-        print("\nExecution Time Summary:")
-        print("-" * 50)
-        prev_time = 0
-        for stage, total_time in self.stage_times.items():
-            stage_duration = total_time - prev_time
-            print(f"{stage:<30} : {str(timedelta(seconds=stage_duration))}")
-            prev_time = total_time
-        print("-" * 50)
-        total_time = self.stage_times[list(self.stage_times.keys())[-1]]
-        print(f"Total execution time: {str(timedelta(seconds=total_time))}")
-
-def get_mapping():
-    """Returns mapping of CSV patterns to Excel sheet names."""
-    return {
+def map_csv_to_sheet(csv_filename):
+    """
+    Maps a CSV filename to the corresponding Excel sheet name based on predefined patterns.
+    """
+    basename = os.path.splitext(csv_filename)[0]
+    mapping = {
         'QDS-above-70-crossed-40d': 'QDS above 70 G40',
         'QDS-0-69-crossed-40d': 'QDS below 70 G40',
         'QDS-0-69-less-40d': 'QDS below 70 L40',
         'QDS-above-70-less-40d': 'QDS above 70 L40'
     }
+    return mapping.get(basename, None)
 
-def clean_filename(filename):
-    """Remove 'processed' prefix from filename if present."""
-    return filename.replace('processed_', '')
-
-def load_excel_sheets(excel_path, mapping):
-    """Loads Excel sheets using pandas to Dask."""
+def read_excel_sheets(excel_path):
+    """
+    Reads all sheets from the Excel file into a dictionary of Polars DataFrames.
+    All data is read as strings to handle mixed-type cells.
+    """
     try:
-        print("Loading Excel sheets... This might take some time.")
-        wb = load_workbook(excel_path, read_only=True)
-        sheet_names = wb.sheetnames
-        wb.close()
+        # Use pandas to read Excel sheets with optimized parameters
+        excel_dict = pd.read_excel(
+            excel_path,
+            sheet_name=None,
+            engine='openpyxl',
+            dtype=str,  # Read all data as string to handle mixed types
+            engine_kwargs={'read_only': True, 'data_only': True}
+        )
+        # Convert pandas DataFrames to Polars DataFrames
+        polars_dict = {}
+        for sheet, df in excel_dict.items():
+            polars_dict[sheet] = pl.from_pandas(df)
+        return polars_dict
+    except Exception as e:
+        logging.error(f"Error reading Excel file '{excel_path}': {e}")
+        sys.exit(1)
 
-        # Load the sheets into Dask DataFrames
-        excel_data = {}
-        for sheet_name in tqdm(mapping.values(), desc="Loading Excel sheets"):
-            if sheet_name in sheet_names:
-                df = pd.read_excel(excel_path, sheet_name=sheet_name, dtype=str)
-                ddf = dd.from_pandas(df, npartitions=4)  # Convert pandas to Dask
-                excel_data[sheet_name] = ddf
+def read_csv_file(csv_path):
+    """
+    Reads a CSV file into a Polars DataFrame with all columns as strings.
+    Logs any malformed rows or read errors.
+    """
+    try:
+        # Define read options for better performance
+        df = pl.read_csv(
+            csv_path,
+            try_parse_dates=False,  # Disable automatic date parsing
+            ignore_errors=False,     # Do not ignore errors to capture bad rows
+            low_memory=False,        # Disable low_memory to improve type inference
+            n_threads=4,             # Utilize all available cores
+            dtype_backend='string'   # Read all data as strings to handle mixed types
+        )
+        return df
+    except pl.errors.ParseError as pe:
+        logging.error(f"Parse error in file '{csv_path}': {pe}")
+    except Exception as e:
+        logging.error(f"Unexpected error reading CSV file '{csv_path}': {e}")
+    return None
+
+def parse_columns(df, date_column='Date'):
+    """
+    Parses columns to their appropriate data types.
+    Specifically handles the Date column and attempts to parse numerical columns.
+    Logs any parsing errors.
+    """
+    try:
+        # Parse the Date column
+        if date_column in df.columns:
+            df = df.with_column(
+                pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+            )
+        else:
+            logging.warning(f"Date column '{date_column}' not found in DataFrame.")
+        
+        # Attempt to parse other columns to numeric where possible
+        for col in df.columns:
+            if col == date_column:
+                continue
+            # Attempt to parse to Float, then Int if possible
+            df = df.with_column(
+                pl.col(col).str.parse_float(strict=False).alias(f"{col}_float")
+            )
+            df = df.with_column(
+                pl.col(col).str.parse_int(strict=False).alias(f"{col}_int")
+            )
+            # Combine parsed columns back to original, preferring integers over floats over strings
+            df = df.with_columns([
+                pl.when(pl.col(f"{col}_int").is_not_null()).then(pl.col(f"{col}_int")).otherwise(
+                    pl.when(pl.col(f"{col}_float").is_not_null()).then(pl.col(f"{col}_float")).otherwise(pl.col(col))
+                ).alias(col)
+            ])
+            # Drop temporary parsed columns
+            df = df.drop([f"{col}_float", f"{col}_int"])
+        
+        return df
+    except Exception as e:
+        logging.error(f"Error parsing columns: {e}")
+        return df  # Return DataFrame even if parsing fails
+
+def merge_data(excel_df, csv_df, date_column='Date'):
+    """
+    Merges CSV DataFrame into Excel DataFrame based on the date column.
+    """
+    try:
+        # Ensure the date column is in datetime format
+        if date_column in excel_df.columns:
+            excel_df = excel_df.with_column(
+                pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+            )
+        else:
+            logging.warning(f"Date column '{date_column}' not found in Excel DataFrame.")
+        
+        if date_column in csv_df.columns:
+            csv_df = csv_df.with_column(
+                pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+            )
+        else:
+            logging.warning(f"Date column '{date_column}' not found in CSV DataFrame.")
+        
+        # Perform a join on the date column
+        merged_df = excel_df.join(csv_df, on=date_column, how='outer')
+        
+        return merged_df
+    except Exception as e:
+        logging.error(f"Error merging data: {e}")
+        return excel_df  # Return original if merge fails
+
+def remove_oldest_rows(excel_sheets_dict, date_column='Date'):
+    """
+    Removes rows with the oldest date from each sheet.
+    """
+    for sheet_name, df in excel_sheets_dict.items():
+        try:
+            # Check if date column exists
+            if date_column not in df.columns:
+                logging.warning(f"Date column '{date_column}' not found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
+                continue
+            
+            # Ensure the date column is of Date type
+            if df[date_column].dtype != pl.Date:
+                df = df.with_column(
+                    pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+                )
+            
+            # Find the minimum date, ignoring nulls
+            min_date_series = df.select(pl.col(date_column).min()).to_series()
+            if min_date_series.null_count() > 0:
+                min_date = min_date_series.drop_nulls().to_list()[0] if min_date_series.drop_nulls().to_list() else None
             else:
-                print(f"Warning: Sheet '{sheet_name}' not found in Excel file.")
+                min_date = min_date_series.to_list()[0]
+            
+            if min_date:
+                # Filter out rows with the minimum date
+                df_filtered = df.filter(pl.col(date_column) != min_date)
+                excel_sheets_dict[sheet_name] = df_filtered
+                logging.info(f"Removed rows with date '{min_date}' from sheet '{sheet_name}'.")
+            else:
+                logging.warning(f"No valid dates found in sheet '{sheet_name}'. Skipping removal of oldest rows.")
+        except Exception as e:
+            logging.error(f"Error removing oldest rows in sheet '{sheet_name}': {e}")
 
-        return excel_data
-    except Exception as e:
-        print(f"Error loading Excel file: {str(e)}")
-        return {}
-
-def process_csv_files_and_update_excel(excel_data, mapping, csv_files):
+def save_final_excel(excel_sheets_dict, original_excel_path):
     """
-    Process CSV files and update corresponding Excel sheets using Dask.
+    Saves the final Excel file with a timestamp and creates a backup of the original.
     """
     try:
-        csv_count = 0
-        with ProgressBar():
-            for csv_file in tqdm(csv_files, desc="Processing CSV files"):
-                base_name = clean_filename(os.path.basename(csv_file))
-
-                # Check if file matches any pattern
-                for pattern, sheet_name in mapping.items():
-                    if pattern in base_name:
-                        print(f"Processing file '{csv_file}' for sheet '{sheet_name}'")
-                        try:
-                            # Read CSV with Dask
-                            csv_data = dd.read_csv(csv_file, dtype=str)
-
-                            # Combine CSV and Excel data
-                            if sheet_name in excel_data:
-                                combined_data = dd.concat([excel_data[sheet_name], csv_data])
-
-                                # Update the Excel data
-                                excel_data[sheet_name] = combined_data
-
-                            csv_count += 1
-                        except Exception as e:
-                            print(f"Error processing CSV file '{csv_file}' for sheet '{sheet_name}': {str(e)}")
-                        break
-        return csv_count
-    except Exception as e:
-        print(f"Error updating Excel file: {str(e)}")
-        return 0
-
-def save_updated_excel(excel_data, excel_path):
-    """Save the updated Excel sheets back to a new Excel file with a timestamp."""
-    try:
+        # Create backup
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_excel_path = os.path.join(os.getcwd(), f"NA Trend Report_{timestamp}.xlsx")
-
-        print(f"\nSaving the updated Excel sheets to '{new_excel_path}'. This might take some time.")
-        with pd.ExcelWriter(new_excel_path, engine='openpyxl') as writer:
-            for sheet_name, data in tqdm(excel_data.items(), desc="Saving sheets"):
-                # Compute the final Dask DataFrame
-                df = data.compute()
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-        print(f"Excel file saved as: {new_excel_path}")
+        backup_path = f"{os.path.splitext(original_excel_path)[0]}_backup_{timestamp}.xlsx"
+        # Copy the original file to backup instead of renaming to keep it intact
+        shutil.copy2(original_excel_path, backup_path)
+        logging.info(f"Backup created at '{backup_path}'")
+        
+        # Convert Polars DataFrames to pandas DataFrames
+        pandas_dict = {}
+        for sheet, df in excel_sheets_dict.items():
+            # Convert Polars DataFrame to pandas DataFrame
+            pandas_df = df.to_pandas()
+            pandas_dict[sheet] = pandas_df
+        
+        # Save to new Excel with timestamp
+        final_excel_path = f"{os.path.splitext(original_excel_path)[0]}_Final_{timestamp}.xlsx"
+        with pd.ExcelWriter(final_excel_path, engine='openpyxl') as writer:
+            for sheet, df in pandas_dict.items():
+                df.to_excel(writer, sheet_name=sheet, index=False)
+        logging.info(f"Final Excel file saved at '{final_excel_path}'")
+        print(f"Final Excel file saved at '{final_excel_path}'")
     except Exception as e:
-        print(f"Error saving Excel file: {str(e)}")
+        logging.error(f"Error saving final Excel file: {e}")
+
+def validate_schema(excel_df, csv_df, expected_columns):
+    """
+    Validates that both DataFrames have the expected columns.
+    Logs discrepancies.
+    """
+    excel_columns = set(excel_df.columns)
+    csv_columns = set(csv_df.columns)
+    missing_in_csv = excel_columns - csv_columns
+    missing_in_excel = csv_columns - excel_columns
+
+    if missing_in_csv:
+        logging.warning(f"Columns missing in CSV: {missing_in_csv}")
+    if missing_in_excel:
+        logging.warning(f"Columns missing in Excel: {missing_in_excel}")
 
 def main():
-    try:
-        # Initialize timer
-        timer = Timer()
+    # Start overall timer
+    overall_start = datetime.now()
 
-        # Get current working directory
-        cwd = os.getcwd()
-        excel_path = os.path.join(cwd, "NA Trend Report.xlsx")
+    # Define current working directory
+    cwd = os.getcwd()
 
-        # Check if Excel file exists
-        if not os.path.exists(excel_path):
-            print(f"Excel file not found: {excel_path}")
-            return
+    excel_file = os.path.join(cwd, 'NA Trend Report.xlsx')
+    csv_pattern = os.path.join(cwd, "*.csv")
 
-        # Step 1: Load the Excel sheets into memory using Dask
-        print("Step 1: Loading Excel sheets...")
-        mapping = get_mapping()
-        excel_data = load_excel_sheets(excel_path, mapping)
-        timer.mark_stage("Excel Loading")
+    # Read Excel sheets
+    print("Reading Excel file...")
+    excel_start = datetime.now()
+    excel_sheets = read_excel_sheets(excel_file)
+    excel_end = datetime.now()
+    print(f"Excel file read in {excel_end - excel_start}")
+    logging.info(f"Excel file '{excel_file}' read in {excel_end - excel_start}")
 
-        # Get CSV files from the current directory
-        csv_files = glob.glob(os.path.join(cwd, "*.csv"))
-        if not csv_files:
-            print("Warning: No CSV files found in the current directory.")
-            return
+    # Find all CSV files matching the pattern
+    csv_files = glob.glob(csv_pattern)
 
-        # Step 2: Process CSV files and update corresponding Excel sheets
-        print("\nStep 2: Processing CSV files and updating Excel sheets...")
-        csv_count = process_csv_files_and_update_excel(excel_data, mapping, csv_files)
-        timer.mark_stage("CSV Processing")
-        print(f"\nProcessed {csv_count} CSV files.")
+    # Exclude the Excel file if it has a .csv extension
+    csv_files = [f for f in csv_files if os.path.basename(f) != 'NA Trend Report.xlsx']
 
-        # Step 3: Save the updated Excel file with a timestamp
-        print("\nStep 3: Saving updated Excel file...")
-        save_updated_excel(excel_data, excel_path)
-        timer.mark_stage("Excel Saving")
+    if not csv_files:
+        logging.error("No CSV files found in the current directory.")
+        sys.exit("No CSV files found.")
 
-        # Print timing summary
-        timer.print_summary()
+    # Process each CSV file
+    print("Processing CSV files...")
+    for csv_file in tqdm(csv_files, desc="CSV Files"):
+        sheet_name = map_csv_to_sheet(os.path.basename(csv_file))
+        if not sheet_name:
+            logging.warning(f"No mapping found for CSV file '{csv_file}'. Skipping.")
+            continue
 
-    except Exception as e:
-        print(f"Error: {str(e)}")
+        if sheet_name not in excel_sheets:
+            logging.warning(f"Sheet '{sheet_name}' not found in Excel file. Skipping CSV '{csv_file}'.")
+            continue
+
+        csv_df = read_csv_file(csv_file)
+        if csv_df is None:
+            logging.error(f"Failed to read CSV file '{csv_file}'. Skipping.")
+            continue
+
+        # Parse columns to handle mixed data types
+        csv_df = parse_columns(csv_df)
+
+        # Optional: Validate schema
+        # Define expected columns if known, else skip
+        # expected_columns = {'Date', 'Column1', 'Column2', ...}
+        # validate_schema(excel_sheets[sheet_name], csv_df, expected_columns)
+
+        # Merge CSV data into the corresponding Excel sheet
+        merged_df = merge_data(excel_sheets[sheet_name], csv_df)
+        excel_sheets[sheet_name] = merged_df
+        logging.info(f"Merged CSV file '{csv_file}' into sheet '{sheet_name}'.")
+
+    # Remove oldest rows
+    print("Removing oldest rows from each sheet...")
+    remove_start = datetime.now()
+    remove_oldest_rows(excel_sheets)
+    remove_end = datetime.now()
+    print(f"Oldest rows removed in {remove_end - remove_start}")
+    logging.info(f"Oldest rows removed in {remove_end - remove_start}")
+
+    # Save final Excel file
+    print("Saving final Excel file...")
+    save_start = datetime.now()
+    save_final_excel(excel_sheets, excel_file)
+    save_end = datetime.now()
+    print(f"Final Excel file saved in {save_end - save_start}")
+    logging.info(f"Final Excel file saved in {save_end - save_start}")
+
+    # End overall timer
+    overall_end = datetime.now()
+    total_time = overall_end - overall_start
+    print(f"Script completed in {total_time}")
+    logging.info(f"Script completed in {total_time}")
 
 if __name__ == "__main__":
     main()
