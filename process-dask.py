@@ -1,6 +1,12 @@
+import sys
+import os
+from site import getusersitepackages
+
+# Add user site-packages to sys.path
+sys.path.append(getusersitepackages())
+
 import pandas as pd
 import dask.dataframe as dd
-import os
 from tqdm import tqdm
 import glob
 import time
@@ -26,6 +32,8 @@ sheets_to_process = list(pattern_to_sheet.values())
 parquet_dir = os.path.join(current_dir, 'parquet_files')
 os.makedirs(parquet_dir, exist_ok=True)
 
+# Rest of your script remains the same...
+
 # Step 1: Convert Excel sheets to Parquet files (if not already converted)
 print("Converting Excel sheets to Parquet files...")
 for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
@@ -33,8 +41,6 @@ for sheet_name in tqdm(sheets_to_process, desc='Converting Sheets'):
     if not os.path.exists(parquet_path):
         # Read all columns as strings to handle mixed types
         df = pd.read_excel(excel_file, sheet_name=sheet_name, dtype=str)
-        # Optionally, parse dates if you have date columns
-        # df['date_column'] = pd.to_datetime(df['date_column'], errors='coerce')
         df.to_parquet(parquet_path, index=False)
 
 # Step 2: Process Parquet files with Dask
@@ -45,7 +51,6 @@ for sheet_name in tqdm(sheets_to_process, desc='Processing Parquet Files'):
 
     # Delete rows with the oldest date in the first column
     first_col = ddf.columns[0]
-    # Convert the first column to datetime if it represents dates
     ddf[first_col] = dd.to_datetime(ddf[first_col], errors='coerce')
     oldest_date = ddf[first_col].min().compute()
     ddf = ddf[ddf[first_col] != oldest_date]
@@ -85,10 +90,7 @@ with pd.ExcelWriter(excel_file, engine='openpyxl', mode='w') as writer:
         parquet_path = os.path.join(parquet_dir, f"{sheet_name}.parquet")
         if os.path.exists(parquet_path):
             ddf = dd.read_parquet(parquet_path, dtype=str)
-            # Convert Dask DataFrame to pandas DataFrame
             df = ddf.compute()
-            # Optionally, convert date columns back to datetime
-            # df['date_column'] = pd.to_datetime(df['date_column'], errors='coerce')
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
 # Calculate and display the total execution time
