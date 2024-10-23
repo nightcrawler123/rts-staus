@@ -18,7 +18,8 @@ required_packages = [
     'polars',
     'tqdm',
     'openpyxl',
-    'pyarrow'  # Needed for Parquet if you choose to use it
+    'pyarrow',
+    'pandas'  # Added Pandas for final Excel writing
 ]
 
 # Function to install missing packages
@@ -36,6 +37,7 @@ install_packages(required_packages)
 # Now import the installed packages
 import polars as pl
 import openpyxl
+import pandas as pd
 
 # Setup logging at the very beginning to capture all events
 logging.basicConfig(
@@ -52,19 +54,12 @@ print("Optimized Script started.")
 # 2. Define CSV to Sheet Mapping
 # ==========================
 
-def map_csv_to_sheet(csv_filename):
+def map_csv_to_sheet(sheet_name):
     """
-    Maps a CSV filename to the corresponding Excel sheet name based on predefined patterns.
-    Adjust the mapping dictionary as per your actual file and sheet names.
+    Maps a sheet name to its corresponding processed CSV filename.
+    Since CSVs are generated from sheet names, mapping is direct.
     """
-    basename = os.path.splitext(csv_filename)[0]
-    mapping = {
-        'QDS-above-70-crossed-40d': 'QDS above 70 G40',
-        'QDS-0-69-crossed-40d': 'QDS below 70 G40',
-        'QDS-0-69-less-40d': 'QDS below 70 L40',
-        'QDS-above-70-less-40d': 'QDS above 70 L40'
-    }
-    return mapping.get(basename, None)
+    return sheet_name
 
 # ==========================
 # 3. Handle Duplicate Columns
@@ -116,11 +111,16 @@ def convert_excel_to_csv(excel_path, temp_dir):
     
         for sheet in tqdm(sheet_names, desc="Converting Sheets to CSV"):
             ws = wb[sheet]
-            csv_path = os.path.join(temp_dir, f"{sheet}.csv")
+            # Replace any characters in sheet name that are invalid in filenames
+            safe_sheet_name = "".join([c if c.isalnum() or c in " _-" else "_" for c in sheet])
+            csv_path = os.path.join(temp_dir, f"{safe_sheet_name}.csv")
     
             # Read the sheet data
             data = ws.values
-            cols = next(data)
+            try:
+                cols = next(data)
+            except StopIteration:
+                cols = []
             with open(csv_path, 'w', encoding='utf-8') as f:
                 # Write header
                 f.write(','.join([str(col) if col is not None else "" for col in cols]) + '\n')
@@ -160,9 +160,10 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             sheet_name = os.path.splitext(os.path.basename(csv_file))[0]
             target_sheet = map_csv_to_sheet(sheet_name)
     
-            if not target_sheet:
-                print(f"No mapping found for CSV file '{csv_file}'. Skipping.")
-                logging.warning(f"No mapping found for CSV file '{csv_file}'. Skipping.")
+            # Check if the target sheet exists in original_excel_columns
+            if target_sheet not in original_excel_columns:
+                print(f"No corresponding Excel sheet for CSV '{csv_file}'. Skipping.")
+                logging.warning(f"No corresponding Excel sheet for CSV '{csv_file}'. Skipping.")
                 continue
     
             # Read CSV with Polars
@@ -181,8 +182,8 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             print(f"Identified date column in CSV: '{date_column}'")
             logging.info(f"Identified date column in CSV: '{date_column}'")
     
-            # Convert date column to datetime
-            pl_df = pl_df.with_column(
+            # Convert the date column to datetime
+            pl_df = pl_df.with_columns(
                 pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
             )
     
@@ -201,11 +202,11 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
             for col in pl_df.columns:
                 if pl_df[col].dtype in [pl.Float64, pl.Int64, pl.UInt64]:
                     mean_val = pl_df[col].mean()
-                    pl_df = pl_df.with_column(pl.col(col).fill_null(mean_val))
+                    pl_df = pl_df.with_columns(pl.col(col).fill_null(mean_val))
                 elif pl_df[col].dtype == pl.Date:
-                    pl_df = pl_df.with_column(pl.col(col).fill_null(datetime(1970, 1, 1)).cast(pl.Date))
+                    pl_df = pl_df.with_columns(pl.lit(datetime(1970, 1, 1)).cast(pl.Date).alias(col).fill_null(datetime(1970, 1, 1)))
                 else:
-                    pl_df = pl_df.with_column(pl.col(col).fill_null("Unknown"))
+                    pl_df = pl_df.with_columns(pl.col(col).fill_null("Unknown"))
     
             # Remove duplicate rows
             initial_row_count = pl_df.height
@@ -217,17 +218,22 @@ def process_csv_files(temp_dir, processed_dir, original_excel_columns):
                 logging.info(f"Removed {duplicates_removed} duplicate rows from CSV '{csv_file}'.")
     
             # Align columns with original Excel columns
-            missing_columns = set(original_excel_columns[target_sheet]) - set(pl_df.columns)
+            original_columns = original_excel_columns[target_sheet]
+            csv_columns = pl_df.columns
+    
+            # Add missing columns with 'Unknown'
+            missing_columns = set(original_columns) - set(csv_columns)
             for col in missing_columns:
-                pl_df = pl_df.with_column(pl.lit("Unknown").alias(col))
+                pl_df = pl_df.with_columns(pl.lit("Unknown").alias(col))
                 logging.warning(f"Column '{col}' missing in CSV '{csv_file}'. Filled with 'Unknown'.")
                 print(f"Column '{col}' missing in CSV '{csv_file}'. Filled with 'Unknown'.")
     
-            # Reorder columns to match Excel
-            pl_df = pl_df.select(original_excel_columns[target_sheet])
+            # Reorder columns to match Excel sheet
+            pl_df = pl_df.select(original_columns)
     
             # Save processed CSV
-            processed_csv_path = os.path.join(processed_dir, f"{sheet_name}_processed.csv")
+            safe_sheet_name = "".join([c if c.isalnum() or c in " _-" else "_" for c in target_sheet])
+            processed_csv_path = os.path.join(processed_dir, f"{safe_sheet_name}_processed.csv")
             pl_df.write_csv(processed_csv_path)
             logging.info(f"Processed CSV saved at '{processed_csv_path}'")
             print(f"Processed CSV saved at '{processed_csv_path}'")
@@ -253,14 +259,13 @@ def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_exc
         # Load the original Excel data into Polars DataFrames
         excel_dfs = {}
         for sheet, cols in original_excel_columns.items():
-            excel_csv = os.path.join(processed_dir, f"{sheet}.csv")
-            if os.path.exists(excel_csv):
-                pl_df = pl.read_csv(excel_csv)
-                pl_df = handle_duplicate_columns(pl_df)
+            original_csv = os.path.join(processed_dir, f"{sheet}_processed.csv")
+            if os.path.exists(original_csv):
+                pl_df = pl.read_csv(original_csv)
                 excel_dfs[sheet] = pl_df
             else:
-                logging.warning(f"Expected CSV for sheet '{sheet}' not found. Skipping.")
-                print(f"Expected CSV for sheet '{sheet}' not found. Skipping.")
+                logging.warning(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
+                print(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
     
         # Process each processed CSV and append to the corresponding DataFrame
         processed_csv_files = glob.glob(os.path.join(processed_dir, "*_processed.csv"))
@@ -342,14 +347,19 @@ def main():
         # Step 2: Define original Excel sheet columns to ensure alignment
         # This assumes that the original Excel sheets have consistent columns
         # Adjust as necessary
-        excel_wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
         original_excel_columns = {}
-        for sheet in excel_wb.sheetnames:
-            ws = excel_wb[sheet]
-            headers = next(ws.values)
-            headers = [str(col) if col is not None else "" for col in headers]
-            original_excel_columns[sheet] = headers
-        excel_wb.close()
+        for sheet in wb.sheetnames:
+            ws = wb[sheet]
+            try:
+                headers = next(ws.values)
+                headers = [str(col).strip() if col is not None else "" for col in headers]
+                original_excel_columns[sheet] = headers
+            except StopIteration:
+                original_excel_columns[sheet] = []
+                logging.warning(f"No headers found in sheet '{sheet}'.")
+                print(f"No headers found in sheet '{sheet}'.")
+        wb.close()
     
         # Step 3: Process CSV files using Polars
         print("\n--- Step 2: Processing CSV Files with Polars ---")
