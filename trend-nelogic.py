@@ -42,6 +42,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+from openpyxl import load_workbook
+
 def map_csv_to_sheet(csv_filename):
     """
     Maps a CSV filename to the corresponding Excel sheet name based on predefined patterns.
@@ -60,7 +62,6 @@ def read_excel_sheets(excel_path):
     Reads all sheets from the Excel file into a dictionary of Polars DataFrames using openpyxl in read-only mode.
     """
     try:
-        from openpyxl import load_workbook
         print(f"Opening Excel file '{excel_path}' with openpyxl...")
         logging.info(f"Opening Excel file '{excel_path}' with openpyxl...")
         wb = load_workbook(excel_path, read_only=True, data_only=True)
@@ -78,14 +79,14 @@ def read_excel_sheets(excel_path):
             data = ws.values
             # Get the first line as columns header
             columns = next(data)
-            # Convert the rest of the data into a list of tuples
+            # Convert the rest of the data into a list of rows
             data_rows = list(data)
 
             # Create Polars DataFrame
-            df = pl.DataFrame(data_rows, columns=columns)
+            df = pl.DataFrame(data_rows, schema=columns)
 
             # Optional: Drop any completely empty columns (if any)
-            df = df.drop_nulls(subset=df.columns)
+            # df = df.drop_nulls(subset=df.columns)
 
             polars_dict[sheet_name] = df
             sheet_end_time = datetime.now()
@@ -101,6 +102,10 @@ def read_excel_sheets(excel_path):
     except Exception as e:
         logging.error(f"Error reading Excel file '{excel_path}': {e}")
         sys.exit(f"Error reading Excel file '{excel_path}': {e}")
+
+# Rest of the functions remain the same...
+
+# (Include the other functions: read_csv_file, parse_columns, merge_data, remove_oldest_rows, save_final_excel, main)
 
 def read_csv_file(csv_path):
     """
