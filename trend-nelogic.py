@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 import shutil
 from tqdm import tqdm
+import gc  # For garbage collection
 
 # List of required packages
 required_packages = [
@@ -36,7 +37,7 @@ import pandas as pd
 # Setup logging
 logging.basicConfig(
     filename='data_processing.log',
-    filemode='a',
+    filemode='w',  # Overwrite log file each run
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
@@ -56,31 +57,46 @@ def map_csv_to_sheet(csv_filename):
 
 def read_excel_sheets(excel_path):
     """
-    Reads all sheets from the Excel file into a dictionary of Polars DataFrames.
-    All data is read as strings to handle mixed-type cells.
-    Provides progress feedback for each sheet being read.
+    Reads all sheets from the Excel file into a dictionary of Polars DataFrames using openpyxl in read-only mode.
     """
     try:
-        # Use pandas to read Excel sheets with optimized parameters
-        print("Starting to read Excel sheets...")
-        logging.info(f"Starting to read Excel file '{excel_path}'")
-        excel = pd.ExcelFile(excel_path, engine='openpyxl')
-        sheet_names = excel.sheet_names
-        logging.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
-        print(f"Found {len(sheet_names)} sheets: {sheet_names}")
-
+        from openpyxl import load_workbook
+        print(f"Opening Excel file '{excel_path}' with openpyxl...")
+        logging.info(f"Opening Excel file '{excel_path}' with openpyxl...")
+        wb = load_workbook(excel_path, read_only=True, data_only=True)
+        print("Excel file opened successfully.")
+        sheet_names = wb.sheetnames
+        print(f"Found sheets: {sheet_names}")
+        logging.info(f"Found sheets: {sheet_names}")
         polars_dict = {}
-        # Iterate through sheets with a progress bar
-        for sheet in tqdm(sheet_names, desc="Reading Excel Sheets"):
-            print(f"Reading sheet: {sheet}")
+        for sheet_name in tqdm(sheet_names, desc="Reading Excel Sheets"):
+            print(f"Reading sheet: {sheet_name}")
             sheet_start_time = datetime.now()
-            df = excel.parse(sheet_name=sheet, dtype=str, engine_kwargs={'read_only': True, 'data_only': True})
-            polars_df = pl.from_pandas(df)
-            polars_dict[sheet] = polars_df
+            ws = wb[sheet_name]
+
+            # Extract data using generator to minimize memory usage
+            data = ws.values
+            # Get the first line as columns header
+            columns = next(data)
+            # Convert the rest of the data into a list of tuples
+            data_rows = list(data)
+
+            # Create Polars DataFrame
+            df = pl.DataFrame(data_rows, columns=columns)
+
+            # Optional: Drop any completely empty columns (if any)
+            df = df.drop_nulls(subset=df.columns)
+
+            polars_dict[sheet_name] = df
             sheet_end_time = datetime.now()
-            logging.info(f"Read sheet '{sheet}' in {sheet_end_time - sheet_start_time}")
-            print(f"Finished reading sheet: {sheet} in {sheet_end_time - sheet_start_time}")
+            elapsed_time = sheet_end_time - sheet_start_time
+            print(f"Finished reading sheet: {sheet_name} in {elapsed_time}")
+            logging.info(f"Finished reading sheet: {sheet_name} in {elapsed_time}")
+            # Free memory
+            del ws
+            gc.collect()
         print("Completed reading all Excel sheets.")
+        wb.close()
         return polars_dict
     except Exception as e:
         logging.error(f"Error reading Excel file '{excel_path}': {e}")
@@ -99,7 +115,8 @@ def read_csv_file(csv_path):
             ignore_errors=False,     # Do not ignore errors to capture bad rows
             low_memory=False,        # Disable low_memory to improve type inference
             n_threads=4,             # Utilize all available cores
-            dtype_backend='string'   # Read all data as strings to handle mixed types
+            infer_schema_length=1000,  # Infer schema from first 1000 rows
+            dtype={"Date": pl.Utf8},   # Ensure Date column is read as string
         )
         logging.info(f"Successfully read CSV file '{csv_path}' with {df.height} rows and {df.width} columns.")
         print(f"Successfully read CSV file: {csv_path} with {df.height} rows and {df.width} columns.")
@@ -127,26 +144,12 @@ def parse_columns(df, date_column='Date'):
             logging.warning(f"Date column '{date_column}' not found in DataFrame.")
         
         # Attempt to parse other columns to numeric where possible
-        for col in df.columns:
-            if col == date_column:
-                continue
-            # Attempt to parse to Float, then Int if possible
+        numeric_columns = [col for col in df.columns if col != date_column]
+        for col in numeric_columns:
+            # Attempt to parse to Float
             df = df.with_column(
-                pl.col(col).str.parse_float(strict=False).alias(f"{col}_float")
+                pl.col(col).str.strip().str.replace(',', '').cast(pl.Float64, strict=False)
             )
-            df = df.with_column(
-                pl.col(col).str.parse_int(strict=False).alias(f"{col}_int")
-            )
-            # Combine parsed columns back to original, preferring integers over floats over strings
-            df = df.with_columns([
-                pl.when(pl.col(f"{col}_int").is_not_null()).then(pl.col(f"{col}_int"))
-                .otherwise(
-                    pl.when(pl.col(f"{col}_float").is_not_null()).then(pl.col(f"{col}_float"))
-                    .otherwise(pl.col(col))
-                ).alias(col)
-            ])
-            # Drop temporary parsed columns
-            df = df.drop([f"{col}_float", f"{col}_int"])
         logging.info("Completed parsing columns to appropriate data types.")
         return df
     except Exception as e:
@@ -161,14 +164,14 @@ def merge_data(excel_df, csv_df, date_column='Date'):
         # Ensure the date column is in datetime format
         if date_column in excel_df.columns:
             excel_df = excel_df.with_column(
-                pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+                pl.col(date_column).cast(pl.Date, strict=False)
             )
         else:
             logging.warning(f"Date column '{date_column}' not found in Excel DataFrame.")
         
         if date_column in csv_df.columns:
             csv_df = csv_df.with_column(
-                pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+                pl.col(date_column).cast(pl.Date, strict=False)
             )
         else:
             logging.warning(f"Date column '{date_column}' not found in CSV DataFrame.")
@@ -198,7 +201,7 @@ def remove_oldest_rows(excel_sheets_dict, date_column='Date'):
             # Ensure the date column is of Date type
             if df[date_column].dtype != pl.Date:
                 df = df.with_column(
-                    pl.col(date_column).str.strptime(pl.Date, fmt="%Y-%m-%d", strict=False).alias(date_column)
+                    pl.col(date_column).cast(pl.Date, strict=False)
                 )
             
             # Find the minimum date, ignoring nulls
@@ -236,6 +239,9 @@ def save_final_excel(excel_sheets_dict, original_excel_path):
             pandas_df = df.to_pandas()
             pandas_dict[sheet] = pandas_df
             logging.info(f"Converted sheet '{sheet}' to pandas DataFrame.")
+            # Free memory
+            del df
+            gc.collect()
         
         # Save to new Excel with timestamp
         final_excel_path = f"{os.path.splitext(original_excel_path)[0]}_Final_{timestamp}.xlsx"
@@ -244,26 +250,14 @@ def save_final_excel(excel_sheets_dict, original_excel_path):
             for sheet, df in pandas_dict.items():
                 df.to_excel(writer, sheet_name=sheet, index=False)
                 logging.info(f"Saved sheet '{sheet}' to final Excel file.")
+                # Free memory
+                del df
+                gc.collect()
         logging.info(f"Final Excel file saved at '{final_excel_path}'")
         print(f"Final Excel file saved at '{final_excel_path}'")
     except Exception as e:
         logging.error(f"Error saving final Excel file: {e}")
         print(f"Error saving final Excel file: {e}")
-
-def validate_schema(excel_df, csv_df, expected_columns):
-    """
-    Validates that both DataFrames have the expected columns.
-    Logs discrepancies.
-    """
-    excel_columns = set(excel_df.columns)
-    csv_columns = set(csv_df.columns)
-    missing_in_csv = excel_columns - csv_columns
-    missing_in_excel = csv_columns - excel_columns
-
-    if missing_in_csv:
-        logging.warning(f"Columns missing in CSV: {missing_in_csv}")
-    if missing_in_excel:
-        logging.warning(f"Columns missing in Excel: {missing_in_excel}")
 
 def main():
     # Start overall timer
@@ -322,16 +316,15 @@ def main():
         # Parse columns to handle mixed data types
         csv_df = parse_columns(csv_df)
 
-        # Optional: Validate schema
-        # Define expected columns if known, else skip
-        # expected_columns = {'Date', 'Column1', 'Column2', ...}
-        # validate_schema(excel_sheets[sheet_name], csv_df, expected_columns)
-
         # Merge CSV data into the corresponding Excel sheet
         merged_df = merge_data(excel_sheets[sheet_name], csv_df)
         excel_sheets[sheet_name] = merged_df
         logging.info(f"Merged CSV file '{csv_file}' into sheet '{sheet_name}'.")
         print(f"Merged CSV file '{csv_file}' into sheet '{sheet_name}'.")
+        # Free memory
+        del csv_df
+        del merged_df
+        gc.collect()
 
     # Remove oldest rows
     print("Removing oldest rows from each sheet...")
