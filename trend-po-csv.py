@@ -36,7 +36,7 @@ install_packages(required_packages)
 import pandas as pd
 import openpyxl
 
-# Setup logging at the very beginning to capture all events
+# Setup logging to capture detailed information
 logging.basicConfig(
     filename='data_processing_pandas.log',
     filemode='w',  # Overwrite log file each run
@@ -48,232 +48,193 @@ logging.info("Pandas-Based Data Processing Script Started.")
 print("Pandas-Based Data Processing Script Started.")
 
 # ==========================
-# 2. Define CSV to Sheet Mapping
+# 2. Define Helper Functions
 # ==========================
 
-def map_csv_to_sheet(sheet_name):
+def delete_oldest_date_rows(df, date_column):
     """
-    Maps a sheet name to itself.
-    Since CSVs are generated from sheet names, mapping is direct.
+    Deletes all rows with the oldest date in the specified date column.
+    
+    Parameters:
+        df (pd.DataFrame): The DataFrame to process.
+        date_column (str): The name of the date column.
+        
+    Returns:
+        df (pd.DataFrame): The DataFrame after deletion.
+        oldest_date (datetime): The oldest date that was deleted.
     """
-    return sheet_name
+    # Convert date column to datetime if not already
+    if not pd.api.types.is_datetime64_any_dtype(df[date_column]):
+        df[date_column] = pd.to_datetime(df[date_column], format='%m/%d/%Y', errors='coerce')
+    
+    # Find the oldest date
+    oldest_date = df[date_column].min()
+    
+    if pd.isna(oldest_date):
+        print(f"No valid dates found in column '{date_column}'. No rows deleted.")
+        logging.warning(f"No valid dates found in column '{date_column}'. No rows deleted.")
+        return df, None
+    
+    # Delete all rows with the oldest date
+    initial_row_count = len(df)
+    df = df[df[date_column] != oldest_date]
+    final_row_count = len(df)
+    rows_deleted = initial_row_count - final_row_count
+    
+    print(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.strftime('%m/%d/%Y')}'.")
+    logging.info(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.strftime('%m/%d/%Y')}'.")
+    
+    return df, oldest_date
+
+def append_new_data(existing_df, new_df, date_column, excel_row_limit=1048576):
+    """
+    Appends new data to the existing DataFrame. If appending exceeds the Excel row limit,
+    deletes the oldest date rows until there is enough space.
+    
+    Parameters:
+        existing_df (pd.DataFrame): The existing DataFrame.
+        new_df (pd.DataFrame): The new DataFrame to append.
+        date_column (str): The name of the date column.
+        excel_row_limit (int): Maximum number of rows allowed in Excel.
+        
+    Returns:
+        updated_df (pd.DataFrame): The updated DataFrame after appending.
+    """
+    # Ensure date columns are datetime
+    if not pd.api.types.is_datetime64_any_dtype(existing_df[date_column]):
+        existing_df[date_column] = pd.to_datetime(existing_df[date_column], format='%m/%d/%Y', errors='coerce')
+    if not pd.api.types.is_datetime64_any_dtype(new_df[date_column]):
+        new_df[date_column] = pd.to_datetime(new_df[date_column], format='%m/%d/%Y', errors='coerce')
+    
+    # Calculate total rows after appending
+    total_rows = len(existing_df) + len(new_df)
+    
+    # Delete oldest date rows until within limit
+    while total_rows > excel_row_limit:
+        # Find the oldest date
+        oldest_date = existing_df[date_column].min()
+        if pd.isna(oldest_date):
+            print("No valid dates to delete. Cannot append more data.")
+            logging.error("No valid dates to delete. Cannot append more data.")
+            break
+        
+        # Delete rows with the oldest date
+        initial_row_count = len(existing_df)
+        existing_df = existing_df[existing_df[date_column] != oldest_date]
+        final_row_count = len(existing_df)
+        rows_deleted = initial_row_count - final_row_count
+        
+        print(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.strftime('%m/%d/%Y')}' to make space.")
+        logging.info(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.strftime('%m/%d/%Y')}' to make space.")
+        
+        # Update total rows
+        total_rows = len(existing_df) + len(new_df)
+    
+    # Append the new data
+    updated_df = pd.concat([existing_df, new_df], ignore_index=True)
+    print(f"Appended {len(new_df)} new rows. Total rows now: {len(updated_df)}.")
+    logging.info(f"Appended {len(new_df)} new rows. Total rows now: {len(updated_df)}.")
+    
+    return updated_df
 
 # ==========================
-# 3. Convert Excel Sheets to CSV
+# 3. Main Processing Functions
 # ==========================
 
-def convert_excel_to_csv(excel_path, temp_dir):
+def process_excel_file(excel_path, new_data_dir, final_excel_path):
     """
-    Converts each sheet in the Excel file to separate CSV files for faster processing.
+    Processes the Excel file by deleting oldest date rows and appending new data.
+    
+    Parameters:
+        excel_path (str): Path to the original Excel file.
+        new_data_dir (str): Directory containing new CSV files to append.
+        final_excel_path (str): Path to save the final Excel file.
     """
     try:
-        # Ensure temp directory exists
-        os.makedirs(temp_dir, exist_ok=True)
-    
-        # Load the Excel workbook
-        excel_file = pd.ExcelFile(excel_path)
+        # Read the Excel file
+        excel_file = pd.ExcelFile(excel_path, engine='openpyxl')
         sheet_names = excel_file.sheet_names
         logging.info(f"Found sheets: {sheet_names}")
         print(f"Found sheets: {sheet_names}")
-    
-        for sheet in tqdm(sheet_names, desc="Converting Sheets to CSV"):
+        
+        # Dictionary to hold processed DataFrames
+        processed_dfs = {}
+        
+        for sheet in tqdm(sheet_names, desc="Processing Sheets"):
+            # Read each sheet into a DataFrame
             df = pd.read_excel(excel_path, sheet_name=sheet, engine='openpyxl')
-            csv_path = os.path.join(temp_dir, f"{sheet}.csv")
-            df.to_csv(csv_path, index=False, encoding='utf-8')
-            logging.info(f"Converted sheet '{sheet}' to CSV at '{csv_path}'")
-            print(f"Converted sheet '{sheet}' to CSV at '{csv_path}'")
-    
-    except Exception as e:
-        logging.error(f"Error converting Excel to CSV: {e}")
-        print(f"Error converting Excel to CSV: {e}")
-        sys.exit(1)
-
-# ==========================
-# 4. Process CSV Files with Pandas
-# ==========================
-
-def process_csv_files(temp_dir, processed_dir, original_excel_columns):
-    """
-    Processes each CSV file using Pandas:
-    - Deletes rows with the oldest date.
-    - Removes duplicate rows.
-    - Handles missing values.
-    - Aligns columns with original Excel sheets.
-    """
-    try:
-        os.makedirs(processed_dir, exist_ok=True)
-        csv_files = glob.glob(os.path.join(temp_dir, "*.csv"))
-    
-        for csv_file in tqdm(csv_files, desc="Processing CSV Files"):
-            sheet_name = os.path.splitext(os.path.basename(csv_file))[0]
-            target_sheet = map_csv_to_sheet(sheet_name)
-    
-            # Check if the target sheet exists in original_excel_columns
-            if target_sheet not in original_excel_columns:
-                print(f"No corresponding Excel sheet for CSV '{csv_file}'. Skipping.")
-                logging.warning(f"No corresponding Excel sheet for CSV '{csv_file}'. Skipping.")
-                continue
-    
-            # Read CSV with Pandas
-            try:
-                df = pd.read_csv(csv_file, encoding='utf-8')
-            except Exception as e:
-                logging.error(f"Error reading CSV '{csv_file}': {e}")
-                print(f"Error reading CSV '{csv_file}': {e}")
-                continue
-    
+            
             if df.empty:
-                print(f"CSV file '{csv_file}' is empty. Skipping.")
-                logging.warning(f"CSV file '{csv_file}' is empty. Skipping.")
+                print(f"Sheet '{sheet}' is empty. Skipping.")
+                logging.warning(f"Sheet '{sheet}' is empty. Skipping.")
+                processed_dfs[sheet] = df
                 continue
-    
-            # Ensure column names are strings and stripped
-            df.columns = [str(col).strip() for col in df.columns]
-    
+            
             # Assume the first column is the date column
             date_column = df.columns[0]
-            print(f"Identified date column in CSV: '{date_column}'")
-            logging.info(f"Identified date column in CSV: '{date_column}'")
-    
-            # Convert the date column to datetime
-            df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-    
-            # Find the oldest date
-            oldest_date = df[date_column].min()
-            if pd.isna(oldest_date):
-                print(f"No valid dates found in CSV '{csv_file}'. Skipping deletion.")
-                logging.warning(f"No valid dates found in CSV '{csv_file}'. Skipping deletion.")
-            else:
-                # Filter out rows with the oldest date
-                initial_row_count = len(df)
-                df = df[df[date_column] != oldest_date]
-                final_row_count = len(df)
-                rows_deleted = initial_row_count - final_row_count
-                print(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.date()}' from CSV '{csv_file}'.")
-                logging.info(f"Deleted {rows_deleted} rows with the oldest date '{oldest_date.date()}' from CSV '{csv_file}'.")
-    
-            # Handle missing values
-            for col in df.columns:
-                if df[col].dtype in ['float64', 'int64']:
-                    mean_val = df[col].mean()
-                    df[col].fillna(mean_val, inplace=True)
-                elif pd.api.types.is_datetime64_any_dtype(df[col]):
-                    df[col].fillna(pd.Timestamp('1970-01-01'), inplace=True)
+            
+            # Delete oldest date rows
+            df, deleted_date = delete_oldest_date_rows(df, date_column)
+            
+            # Append new data if available
+            new_csv_path = os.path.join(new_data_dir, f"{sheet}.csv")
+            if os.path.exists(new_csv_path):
+                new_df = pd.read_csv(new_csv_path, encoding='utf-8')
+                
+                if new_df.empty:
+                    print(f"New data CSV for sheet '{sheet}' is empty. No data appended.")
+                    logging.warning(f"New data CSV for sheet '{sheet}' is empty. No data appended.")
                 else:
-                    df[col].fillna("Unknown", inplace=True)
-    
+                    # Ensure column alignment
+                    missing_cols = set(df.columns) - set(new_df.columns)
+                    for col in missing_cols:
+                        new_df[col] = "Unknown"
+                    
+                    # Reorder new_df columns to match df
+                    new_df = new_df[df.columns]
+                    
+                    # Handle data types if necessary
+                    # (Assuming data types are consistent; otherwise, add type conversion here)
+                    
+                    # Append new data, ensuring Excel row limit
+                    df = append_new_data(df, new_df, date_column)
+            else:
+                print(f"No new data CSV found for sheet '{sheet}'. No data appended.")
+                logging.warning(f"No new data CSV found for sheet '{sheet}'. No data appended.")
+            
             # Remove duplicate rows
             initial_row_count = len(df)
             df.drop_duplicates(inplace=True)
             final_row_count = len(df)
             duplicates_removed = initial_row_count - final_row_count
             if duplicates_removed > 0:
-                print(f"Removed {duplicates_removed} duplicate rows from CSV '{csv_file}'.")
-                logging.info(f"Removed {duplicates_removed} duplicate rows from CSV '{csv_file}'.")
-    
-            # Align columns with original Excel columns
-            original_columns = original_excel_columns[target_sheet]
-    
-            # Add missing columns with 'Unknown'
-            missing_columns = set(original_columns) - set(df.columns)
-            for col in missing_columns:
-                df[col] = "Unknown"
-                logging.warning(f"Column '{col}' missing in CSV '{csv_file}'. Filled with 'Unknown'.")
-                print(f"Column '{col}' missing in CSV '{csv_file}'. Filled with 'Unknown'.")
-    
-            # Reorder columns to match Excel sheet
-            df = df[original_columns]
-    
-            # Save processed CSV
-            processed_csv_path = os.path.join(processed_dir, f"{sheet_name}_processed.csv")
-            df.to_csv(processed_csv_path, index=False, encoding='utf-8')
-            logging.info(f"Processed CSV saved at '{processed_csv_path}'")
-            print(f"Processed CSV saved at '{processed_csv_path}'")
-    
+                print(f"Removed {duplicates_removed} duplicate rows from sheet '{sheet}'.")
+                logging.info(f"Removed {duplicates_removed} duplicate rows from sheet '{sheet}'.")
+            
+            # Assign the processed DataFrame to the dictionary
+            processed_dfs[sheet] = df
+            
             # Clear memory
             del df
             gc.collect()
-    
-    except Exception as e:
-        logging.error(f"Error processing CSV files with Pandas: {e}")
-        print(f"Error processing CSV files with Pandas: {e}")
-        sys.exit(1)
-
-# ==========================
-# 5. Append Processed CSVs to Original Excel Sheets
-# ==========================
-
-def append_processed_csvs_to_excel(processed_dir, final_excel_path, original_excel_columns):
-    """
-    Appends processed CSV data to the original Excel sheets and saves to a new Excel file.
-    """
-    try:
-        # Load the original Excel data into Pandas DataFrames
-        excel_dfs = {}
-        for sheet, cols in original_excel_columns.items():
-            processed_csv = os.path.join(processed_dir, f"{sheet}_processed.csv")
-            if os.path.exists(processed_csv):
-                try:
-                    df = pd.read_csv(processed_csv, encoding='utf-8')
-                    excel_dfs[sheet] = df
-                except Exception as e:
-                    logging.error(f"Error reading processed CSV '{processed_csv}': {e}")
-                    print(f"Error reading processed CSV '{processed_csv}': {e}")
-                    continue
-            else:
-                logging.warning(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
-                print(f"Expected processed CSV for sheet '{sheet}' not found. Skipping.")
-    
-        # Process each processed CSV and append to the corresponding DataFrame
-        processed_csv_files = glob.glob(os.path.join(processed_dir, "*_processed.csv"))
-        for processed_csv in tqdm(processed_csv_files, desc="Appending to Excel Sheets"):
-            sheet_name = os.path.basename(processed_csv).replace('_processed.csv', '')
-            target_sheet = map_csv_to_sheet(sheet_name)
-            if not target_sheet:
-                print(f"No mapping found for processed CSV '{processed_csv}'. Skipping.")
-                logging.warning(f"No mapping found for processed CSV '{processed_csv}'. Skipping.")
-                continue
-    
-            if target_sheet not in excel_dfs:
-                print(f"Sheet '{target_sheet}' not loaded. Skipping CSV '{processed_csv}'.")
-                logging.warning(f"Sheet '{target_sheet}' not loaded. Skipping CSV '{processed_csv}'.")
-                continue
-    
-            # Read the processed CSV
-            try:
-                pl_df_new = pd.read_csv(processed_csv, encoding='utf-8')
-            except Exception as e:
-                logging.error(f"Error reading processed CSV '{processed_csv}': {e}")
-                print(f"Error reading processed CSV '{processed_csv}': {e}")
-                continue
-    
-            # Append to the existing DataFrame
-            excel_dfs[target_sheet] = pd.concat([excel_dfs[target_sheet], pl_df_new], ignore_index=True)
-    
-            logging.info(f"Appended data from '{processed_csv}' to sheet '{target_sheet}'.")
-            print(f"Appended data from '{processed_csv}' to sheet '{target_sheet}'.")
-    
-            # Clear memory
-            del pl_df_new
-            gc.collect()
-    
-        # Save all DataFrames to a new Excel file
+        
+        # Write all processed DataFrames to a new Excel file
         with pd.ExcelWriter(final_excel_path, engine='openpyxl') as writer:
-            for sheet, df in excel_dfs.items():
+            for sheet, df in processed_dfs.items():
                 df.to_excel(writer, sheet_name=sheet, index=False)
-                logging.info(f"Saved sheet '{sheet}' with {df.shape[0]} rows.")
-                print(f"Saved sheet '{sheet}' with {df.shape[0]} rows.")
-    
+                logging.info(f"Saved sheet '{sheet}' with {len(df)} rows.")
+                print(f"Saved sheet '{sheet}' with {len(df)} rows.")
+        
         print(f"\nFinal Excel file saved at '{final_excel_path}'")
         logging.info(f"Final Excel file saved at '{final_excel_path}'")
     
     except Exception as e:
-        logging.error(f"Error appending processed CSVs to Excel: {e}")
-        print(f"Error appending processed CSVs to Excel: {e}")
+        logging.error(f"Error processing Excel file: {e}")
+        print(f"Error processing Excel file: {e}")
         sys.exit(1)
 
 # ==========================
-# 6. Main Execution Flow
+# 4. Main Execution Flow
 # ==========================
 
 def main():
@@ -293,54 +254,20 @@ def main():
             logging.error(f"Excel file '{excel_filename}' not found in the current directory.")
             sys.exit(1)
     
-        # Define temporary directories
-        temp_csv_dir = os.path.join(cwd, "temp_csv")
-        processed_csv_dir = os.path.join(cwd, "processed_csv")
-        os.makedirs(temp_csv_dir, exist_ok=True)
-        os.makedirs(processed_csv_dir, exist_ok=True)
+        # Define the directory containing new CSV data to append
+        new_data_dir = os.path.join(cwd, "new_data_csv")
+        if not os.path.isdir(new_data_dir):
+            print(f"New data directory '{new_data_dir}' not found. Creating it.")
+            logging.warning(f"New data directory '{new_data_dir}' not found. Creating it.")
+            os.makedirs(new_data_dir, exist_ok=True)
     
-        # Step 1: Convert Excel sheets to CSV for faster processing
-        print("\n--- Step 1: Converting Excel Sheets to CSV ---")
-        logging.info("Starting Step 1: Converting Excel Sheets to CSV")
-        convert_excel_to_csv(excel_path, temp_csv_dir)
-    
-        # Step 2: Define original Excel sheet columns to ensure alignment
-        # This assumes that the original Excel sheets have consistent columns
-        # Adjust as necessary
-        excel_file = pd.ExcelFile(excel_path)
-        original_excel_columns = {}
-        for sheet in excel_file.sheet_names:
-            df = excel_file.parse(sheet_name=sheet)
-            original_columns = list(df.columns)
-            original_excel_columns[sheet] = original_columns
-            logging.info(f"Original columns for sheet '{sheet}': {original_columns}")
-        excel_file.close()
-    
-        # Step 3: Process CSV files using Pandas
-        print("\n--- Step 2: Processing CSV Files with Pandas ---")
-        logging.info("Starting Step 2: Processing CSV Files with Pandas")
-        process_csv_files(temp_csv_dir, processed_csv_dir, original_excel_columns)
-    
-        # Step 4: Append processed CSVs to Excel sheets and save to a new Excel file
-        print("\n--- Step 3: Appending Processed CSVs to Excel Sheets ---")
-        logging.info("Starting Step 3: Appending Processed CSVs to Excel Sheets")
+        # Define the path to save the final Excel file
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        final_excel_path = os.path.join(cwd, f"NA Trend Report_Final_{timestamp}.xlsx")
-        append_processed_csvs_to_excel(processed_csv_dir, final_excel_path, original_excel_columns)
+        final_excel_filename = f"NA Trend Report_Final_{timestamp}.xlsx"
+        final_excel_path = os.path.join(cwd, final_excel_filename)
     
-        # Optional: Clean up temporary directories
-        try:
-            shutil.rmtree(temp_csv_dir)
-            shutil.rmtree(processed_csv_dir)
-            print("\nCleaned up temporary directories.")
-            logging.info("Cleaned up temporary directories.")
-        except Exception as e:
-            logging.warning(f"Error cleaning up temporary directories: {e}")
-            print(f"Error cleaning up temporary directories: {e}")
-    
-        # Final message
-        print("\nData processing completed successfully.")
-        logging.info("Data processing completed successfully.")
+        # Process the Excel file
+        process_excel_file(excel_path, new_data_dir, final_excel_path)
     
     except Exception as e:
         logging.error(f"An unexpected error occurred in the main execution: {e}")
