@@ -1,9 +1,44 @@
-import pandas as pd
+import sys
 import os
+
+# Add user's site-packages to path
+import site
+user_site_packages = site.getusersitepackages()
+if user_site_packages not in sys.path:
+    sys.path.append(user_site_packages)
+
+# Check and import required packages
+def check_imports():
+    required_packages = {
+        'pandas': 'pandas',
+        'openpyxl': 'openpyxl',
+        'tqdm': 'tqdm'
+    }
+    
+    missing_packages = []
+    
+    for package, import_name in required_packages.items():
+        try:
+            __import__(import_name)
+        except ImportError:
+            missing_packages.append(package)
+    
+    if missing_packages:
+        print("Missing required packages:", ", ".join(missing_packages))
+        print("\nPlease install them using:")
+        print(f"pip install --user {' '.join(missing_packages)}")
+        sys.exit(1)
+
+# Check required packages
+check_imports()
+
+# Import required packages after check
+import pandas as pd
 from datetime import datetime
 from tqdm import tqdm
 import time
 import glob
+from openpyxl import load_workbook
 
 class Timer:
     """Class to track execution time of different stages"""
@@ -40,97 +75,170 @@ def clean_filename(filename):
     """Remove 'processed' prefix from filename if present."""
     return filename.replace('processed_', '')
 
+def read_excel_sheet_efficiently(excel_path, sheet_name):
+    """Read Excel sheet in read-only mode with optimized memory usage."""
+    print(f"Reading sheet: {sheet_name}")
+    
+    try:
+        # Load workbook in read-only mode
+        wb = load_workbook(filename=excel_path, read_only=True)
+        ws = wb[sheet_name]
+        
+        # Get headers
+        headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        
+        # Read data in batches
+        data = []
+        batch_size = 1000
+        current_batch = []
+        
+        for row in tqdm(ws.iter_rows(min_row=2, values_only=True), desc=f"Reading {sheet_name}"):
+            current_batch.append(row)
+            if len(current_batch) >= batch_size:
+                data.extend(current_batch)
+                current_batch = []
+        
+        # Add any remaining rows
+        if current_batch:
+            data.extend(current_batch)
+        
+        # Close workbook
+        wb.close()
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(data, columns=headers)
+        return df
+    
+    except Exception as e:
+        print(f"Error reading sheet {sheet_name}: {str(e)}")
+        return pd.DataFrame()
+
 def process_excel_file(excel_path):
     """Process the Excel file by removing oldest date rows."""
     print("Loading Excel file... (This might take a few minutes for large files)")
     
-    # Read Excel file using chunks to handle large file
-    excel_data = {}
-    for sheet_name in pd.ExcelFile(excel_path).sheet_names:
-        chunks = []
-        for chunk in pd.read_excel(excel_path, sheet_name=sheet_name, chunksize=10000):
-            chunks.append(chunk)
-        excel_data[sheet_name] = pd.concat(chunks, ignore_index=True)
+    try:
+        # Get sheet names
+        wb = load_workbook(filename=excel_path, read_only=True)
+        sheet_names = wb.sheetnames
+        wb.close()
+        
+        # Read each sheet efficiently
+        excel_data = {}
+        for sheet_name in sheet_names:
+            excel_data[sheet_name] = read_excel_sheet_efficiently(excel_path, sheet_name)
+        
+        # Find oldest date across all sheets
+        oldest_date = None
+        print("\nFinding oldest date...")
+        for sheet_name, sheet_data in excel_data.items():
+            if not sheet_data.empty:
+                try:
+                    sheet_date = pd.to_datetime(sheet_data.iloc[:, 0]).min()
+                    if oldest_date is None or sheet_date < oldest_date:
+                        oldest_date = sheet_date
+                except Exception as e:
+                    print(f"Warning: Could not process dates in sheet {sheet_name}: {str(e)}")
+        
+        if oldest_date is None:
+            raise ValueError("Could not find any valid dates in the Excel file")
+        
+        print(f"Oldest date found: {oldest_date}")
+        
+        # Remove rows with oldest date from all sheets
+        print("\nRemoving oldest date rows...")
+        for sheet_name in excel_data:
+            try:
+                excel_data[sheet_name] = excel_data[sheet_name][
+                    pd.to_datetime(excel_data[sheet_name].iloc[:, 0]) > oldest_date
+                ]
+            except Exception as e:
+                print(f"Warning: Could not filter dates in sheet {sheet_name}: {str(e)}")
+        
+        return excel_data
     
-    # Find oldest date across all sheets
-    oldest_date = None
-    for sheet_data in excel_data.values():
-        if not sheet_data.empty:
-            sheet_date = pd.to_datetime(sheet_data.iloc[:, 0]).min()
-            if oldest_date is None or sheet_date < oldest_date:
-                oldest_date = sheet_date
-    
-    # Remove rows with oldest date from all sheets
-    for sheet_name in excel_data:
-        excel_data[sheet_name] = excel_data[sheet_name][
-            pd.to_datetime(excel_data[sheet_name].iloc[:, 0]) > oldest_date
-        ]
-    
-    return excel_data
+    except Exception as e:
+        print(f"Error processing Excel file: {str(e)}")
+        sys.exit(1)
 
 def main():
-    # Initialize timer
-    timer = Timer()
-    
-    # Get current working directory
-    cwd = os.getcwd()
-    excel_path = os.path.join(cwd, "NA Trend Report.xlsx")
-    
-    # Process Excel file
-    print("Step 1: Processing Excel file")
-    excel_data = process_excel_file(excel_path)
-    timer.mark_stage("Excel Loading and Initial Processing")
-    
-    # Get CSV files from current directory
-    csv_files = glob.glob(os.path.join(cwd, "*.csv"))
-    mapping = get_mapping()
-    
-    print("\nStep 2: Processing CSV files and updating Excel sheets...")
-    csv_count = 0
-    for csv_file in tqdm(csv_files):
-        base_name = clean_filename(os.path.basename(csv_file))
+    try:
+        # Initialize timer
+        timer = Timer()
         
-        # Check if file matches any pattern
-        for pattern, sheet_name in mapping.items():
-            if pattern in base_name:
-                # Read CSV in chunks
-                csv_chunks = pd.read_csv(csv_file, chunksize=10000)
-                csv_data = pd.concat(csv_chunks, ignore_index=True)
-                
-                # Get header from Excel
-                excel_header = excel_data[sheet_name].columns
-                
-                # Ensure CSV data types match Excel
-                for col in csv_data.columns:
-                    if col in excel_data[sheet_name].columns:
-                        try:
-                            csv_data[col] = csv_data[col].astype(
-                                excel_data[sheet_name][col].dtype
-                            )
-                        except:
-                            pass  # Keep original dtype if conversion fails
-                
-                # Update Excel data
-                excel_data[sheet_name] = pd.concat(
-                    [excel_data[sheet_name], csv_data],
-                    ignore_index=True
-                )
-                csv_count += 1
-                break
+        # Get current working directory
+        cwd = os.getcwd()
+        excel_path = os.path.join(cwd, "NA Trend Report.xlsx")
+        
+        # Check if Excel file exists
+        if not os.path.exists(excel_path):
+            raise FileNotFoundError(f"Excel file not found: {excel_path}")
+        
+        # Process Excel file
+        print("Step 1: Processing Excel file")
+        excel_data = process_excel_file(excel_path)
+        timer.mark_stage("Excel Loading and Initial Processing")
+        
+        # Get CSV files from current directory
+        csv_files = glob.glob(os.path.join(cwd, "*.csv"))
+        if not csv_files:
+            print("Warning: No CSV files found in the current directory")
+        
+        mapping = get_mapping()
+        
+        print("\nStep 2: Processing CSV files and updating Excel sheets...")
+        csv_count = 0
+        for csv_file in tqdm(csv_files, desc="Processing CSV files"):
+            base_name = clean_filename(os.path.basename(csv_file))
+            
+            # Check if file matches any pattern
+            for pattern, sheet_name in mapping.items():
+                if pattern in base_name:
+                    try:
+                        # Read CSV in chunks
+                        csv_chunks = pd.read_csv(csv_file, chunksize=10000)
+                        csv_data = pd.concat(csv_chunks, ignore_index=True)
+                        
+                        # Get header from Excel
+                        excel_header = excel_data[sheet_name].columns
+                        
+                        # Ensure CSV data types match Excel
+                        for col in csv_data.columns:
+                            if col in excel_data[sheet_name].columns:
+                                try:
+                                    csv_data[col] = csv_data[col].astype(
+                                        excel_data[sheet_name][col].dtype
+                                    )
+                                except:
+                                    pass  # Keep original dtype if conversion fails
+                        
+                        # Update Excel data
+                        excel_data[sheet_name] = pd.concat(
+                            [excel_data[sheet_name], csv_data],
+                            ignore_index=True
+                        )
+                        csv_count += 1
+                    except Exception as e:
+                        print(f"Error processing CSV file {csv_file}: {str(e)}")
+                    break
+        
+        timer.mark_stage("CSV Processing")
+        print(f"\nProcessed {csv_count} CSV files")
+        
+        # Save updated Excel file
+        print("\nStep 3: Saving Excel file...")
+        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+            for sheet_name, data in tqdm(excel_data.items(), desc="Saving sheets"):
+                data.to_excel(writer, sheet_name=sheet_name, index=False)
+        
+        timer.mark_stage("Excel Saving")
+        
+        # Print timing summary
+        timer.print_summary()
     
-    timer.mark_stage("CSV Processing")
-    print(f"\nProcessed {csv_count} CSV files")
-    
-    # Save updated Excel file
-    print("\nStep 3: Saving Excel file...")
-    with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
-        for sheet_name, data in tqdm(excel_data.items()):
-            data.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-    timer.mark_stage("Excel Saving")
-    
-    # Print timing summary
-    timer.print_summary()
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
